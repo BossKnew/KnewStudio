@@ -1,0 +1,19 @@
+{
+  "name": "knewstudio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted image generation workspace with a secure Docker Compose deployment.",
+  "license": "Apache-2.0",
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "npm run build -w @knewstudio/api && npm run build -w @knewstudio/web",
+    "test": "npm run test -w @knewstudio/api && npm run test -w @knewstudio/web",
+    "lint": "npm run lint -w @knewstudio/api && npm run lint -w @knewstudio/web",
+    "db:generate": "npm run db:generate -w @knewstudio/api",
+    "db:migrate": "npm run db:migrate -w @knewstudio/api",
+    "licenses:check": "node scripts/check-licenses.mjs",
+    "security-configs:check": "node scripts/check-security-configs.mjs"
+  },
+  "engines": { "node": ">=24 <25" }
+}

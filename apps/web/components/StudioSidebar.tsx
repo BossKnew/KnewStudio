@@ -1,0 +1,109 @@
+import { KeyboardEvent, useState } from 'react';
+import type { ConversationSummary, StudioUser } from '@/lib/studio-types';
+
+type StudioSidebarProps = {
+  user: StudioUser;
+  assetCount: number;
+  conversations: ConversationSummary[];
+  activeConversationId: string;
+  activeView: 'studio' | 'assets';
+  onNewCreation: () => void;
+  onShowAssets: () => void;
+  onLoadConversation: (id: string) => Promise<void>;
+  onRenameConversation: (id: string, title: string) => Promise<void>;
+  onDeleteConversation: (conversation: ConversationSummary) => void;
+  onShowProfile: () => void;
+  onNavigateToAccount: () => void;
+  onLogout: () => Promise<void>;
+};
+
+export default function StudioSidebar({
+  user, assetCount, conversations, activeConversationId, activeView, onNewCreation, onShowAssets,
+  onLoadConversation, onRenameConversation, onDeleteConversation, onShowProfile, onNavigateToAccount, onLogout,
+}: StudioSidebarProps) {
+  const [recentOpen, setRecentOpen] = useState(true);
+  const [renamingId, setRenamingId] = useState('');
+  const [renameTitle, setRenameTitle] = useState('');
+  const [renaming, setRenaming] = useState(false);
+  const [error, setError] = useState('');
+  const [accountOpen, setAccountOpen] = useState(false);
+
+  function beginRename(item: ConversationSummary) {
+    setRenamingId(item.id);
+    setRenameTitle(item.title);
+    setError('');
+  }
+
+  async function saveRename(id: string) {
+    const title = renameTitle.trim();
+    if (!title) return;
+    setRenaming(true);
+    setError('');
+    try {
+      await onRenameConversation(id, title);
+      setRenamingId('');
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setRenaming(false);
+    }
+  }
+
+  function handleRenameKey(event: KeyboardEvent<HTMLInputElement>, id: string) {
+    if (event.key === 'Enter') void saveRename(id);
+    if (event.key === 'Escape') setRenamingId('');
+  }
+
+  return <aside className="sidebar">
+    <h2 className="brand">KnewStudio</h2>
+    <nav className="sidebar-nav" aria-label="工作区导航">
+      <button className="button primary conversation" onClick={onNewCreation}>＋ 新创作</button>
+      <button className={`button nav-button ${activeView === 'assets' ? 'active' : ''}`} onClick={onShowAssets}>
+        <span className="nav-button-label"><span aria-hidden="true">▧</span> 资产库</span>
+        <span className="nav-count">{assetCount}</span>
+      </button>
+      <button className="recent-toggle" onClick={() => setRecentOpen((open) => !open)} aria-expanded={recentOpen} aria-controls="recent-conversations">
+        <span>最近会话</span><span className={`chevron ${recentOpen ? 'open' : ''}`} aria-hidden="true">›</span>
+      </button>
+      {recentOpen && <div id="recent-conversations" className="conversation-list">
+        {conversations.length === 0 && <p className="sidebar-empty">还没有会话</p>}
+        {conversations.map((item) => <div key={item.id} className={`conversation-row ${activeView === 'studio' && activeConversationId === item.id ? 'active' : ''}`}>
+          {renamingId === item.id ? <div className="rename-box">
+            <input className="field rename-input" value={renameTitle} maxLength={80} autoFocus onChange={(event) => setRenameTitle(event.target.value)} onKeyDown={(event) => handleRenameKey(event, item.id)} aria-label="会话名称" />
+            <button className="icon-button success-action" onClick={() => void saveRename(item.id)} disabled={renaming || !renameTitle.trim()} aria-label="保存重命名">✓</button>
+            <button className="icon-button" onClick={() => setRenamingId('')} disabled={renaming} aria-label="取消重命名">×</button>
+          </div> : <>
+            <button className="conversation-main" onClick={() => void onLoadConversation(item.id)} title={item.title}>
+              <span className="conversation-title">{item.title}</span><span className="conversation-count">{item._count.jobs}</span>
+            </button>
+            <div className="conversation-actions">
+              <button className="icon-button" onClick={() => beginRename(item)} aria-label={`重命名 ${item.title}`} title="重命名">✎</button>
+              <button className="icon-button danger-action" onClick={() => onDeleteConversation(item)} aria-label={`删除 ${item.title}`} title="删除">×</button>
+            </div>
+          </>}
+        </div>)}
+      </div>}
+      {error && <p className="error sidebar-error">{error}</p>}
+    </nav>
+    <div className="account-area">
+      {accountOpen && <div className="account-popover" role="menu">
+        <button className="account-menu-item" role="menuitem" onClick={() => { setAccountOpen(false); onShowProfile(); }}>个人信息</button>
+        <button className="account-menu-item" role="menuitem" onClick={onNavigateToAccount}>{user.role === 'ADMIN' ? '管理后台' : '设置'}</button>
+        <button className="account-menu-item danger-text" role="menuitem" onClick={() => void onLogout()}>退出登录</button>
+      </div>}
+      <button className="account-trigger" type="button" aria-haspopup="menu" aria-expanded={accountOpen} onClick={() => setAccountOpen((open) => !open)}>
+        <span className="user-avatar" aria-hidden="true">{avatarText(user.displayName || user.username)}</span>
+        <span className="account-copy"><strong>{user.displayName || user.username}</strong><span>{user.username}</span></span>
+        <span className="account-chevron" aria-hidden="true">⌃</span>
+      </button>
+    </div>
+  </aside>;
+}
+
+function avatarText(name: string) {
+  const value = name.trim();
+  const chinese = value.match(/[\u3400-\u9fff]/);
+  if (chinese) return chinese[0];
+  const letters = value.replace(/[^A-Za-z0-9]/g, '');
+  return (letters.slice(0, 2) || value.slice(0, 1) || '?').toUpperCase();
+}

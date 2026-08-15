@@ -1,0 +1,254 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  DISABLED
+  DELETING
+}
+
+enum MediaKind {
+  IMAGE
+  VIDEO
+}
+
+enum GenerationMode {
+  TEXT_TO_IMAGE
+  IMAGE_EDIT
+  INPAINT
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum AssetRole {
+  UPLOAD
+  MASK
+  OUTPUT
+  THUMBNAIL
+}
+
+model User {
+  id               String                @id @default(uuid())
+  username         String                @unique
+  displayName      String?
+  passwordHash     String
+  role             UserRole              @default(USER)
+  status           UserStatus            @default(PENDING)
+  mustChangePwd    Boolean               @default(false)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  conversations    Conversation[]
+  jobs             GenerationJob[]
+  assets           Asset[]
+  auditLogs        AuditLog[]            @relation("AuditActor")
+  usage            UserUsage?
+  mfaCredential    MfaCredential?
+  groupMemberships UserGroupMembership[]
+
+  @@index([status])
+}
+
+model MfaCredential {
+  userId               String            @id
+  encryptedSecret      String
+  enabledAt            DateTime          @default(now())
+  lastAcceptedTimeStep BigInt?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  user                 User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recoveryCodes        MfaRecoveryCode[]
+}
+
+model MfaRecoveryCode {
+  id           String        @id @default(uuid())
+  credentialId String
+  codeHash     String        @unique
+  consumedAt   DateTime?
+  createdAt    DateTime      @default(now())
+  credential   MfaCredential @relation(fields: [credentialId], references: [userId], onDelete: Cascade)
+
+  @@index([credentialId, consumedAt])
+}
+
+model UserUsage {
+  userId       String   @id
+  storageBytes BigInt   @default(0)
+  activeJobs   Int      @default(0)
+  updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model SystemSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model Provider {
+  id                String    @id @default(uuid())
+  name              String    @unique
+  baseUrl           String
+  adapterKind       String    @default("openai-images")
+  encryptedApiKey   String
+  encryptedHeaders  String?
+  timeoutSeconds    Int       @default(180)
+  enabled           Boolean   @default(true)
+  archivedAt        DateTime?
+  testCooldownUntil DateTime?
+  lastTestOk        Boolean?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  models            Model[]
+}
+
+model Model {
+  id                 String             @id @default(uuid())
+  providerId         String
+  displayName        String
+  upstreamModelId    String
+  mediaKind          MediaKind          @default(IMAGE)
+  supportsGeneration Boolean            @default(true)
+  supportsEdit       Boolean            @default(false)
+  supportsInpaint    Boolean            @default(false)
+  allowedSizes       Json
+  allowedQualities   Json
+  maxImages          Int                @default(1)
+  maxInputImages     Int                @default(1)
+  defaults           Json
+  enabled            Boolean            @default(true)
+  sortOrder          Int                @default(0)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  provider           Provider           @relation(fields: [providerId], references: [id])
+  jobs               GenerationJob[]
+  allowedGroups      ModelGroupAccess[]
+
+  @@unique([providerId, upstreamModelId])
+  @@index([enabled, sortOrder])
+}
+
+model UserGroup {
+  id          String                @id @default(uuid())
+  name        String                @unique
+  description String?
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  users       UserGroupMembership[]
+  models      ModelGroupAccess[]
+}
+
+model UserGroupMembership {
+  userId     String
+  groupId    String
+  assignedAt DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group      UserGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@id([userId, groupId])
+  @@index([groupId])
+}
+
+model ModelGroupAccess {
+  modelId String
+  groupId String
+  model   Model     @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  group   UserGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@id([modelId, groupId])
+  @@index([groupId])
+}
+
+model Conversation {
+  id        String          @id @default(uuid())
+  userId    String
+  title     String
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobs      GenerationJob[]
+
+  @@index([userId, updatedAt])
+}
+
+model GenerationJob {
+  id             String         @id @default(uuid())
+  userId         String
+  conversationId String
+  modelId        String?
+  mediaKind      MediaKind      @default(IMAGE)
+  mode           GenerationMode
+  status         JobStatus      @default(QUEUED)
+  prompt         String
+  parameters     Json
+  modelSnapshot  Json
+  errorCode      String?
+  errorMessage   String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  quotaReleased  Boolean        @default(false)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation   Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  model          Model?         @relation(fields: [modelId], references: [id], onDelete: SetNull)
+  assets         Asset[]
+
+  @@index([userId, createdAt])
+  @@index([conversationId, createdAt])
+  @@index([status])
+}
+
+model Asset {
+  id           String         @id @default(uuid())
+  userId       String
+  jobId        String?
+  role         AssetRole
+  mediaKind    MediaKind      @default(IMAGE)
+  objectKey    String         @unique
+  mimeType     String
+  sizeBytes    BigInt
+  width        Int?
+  height       Int?
+  originalName String?
+  note         String?
+  deletedAt    DateTime?
+  createdAt    DateTime       @default(now())
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job          GenerationJob? @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, role, deletedAt])
+  @@index([jobId])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?
+  action     String
+  targetType String
+  targetId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([actorId])
+}

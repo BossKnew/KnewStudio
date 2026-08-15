@@ -1,0 +1,1 @@
+ALTER TABLE "Asset" ADD COLUMN "note" TEXT;

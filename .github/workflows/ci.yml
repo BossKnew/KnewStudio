@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  application:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: postgresql://knewstudio:test@localhost:5432/knewstudio
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run db:generate
+      - run: npm test
+      - run: npm run lint
+      - run: npm run build
+      - run: npx prisma validate --schema apps/api/prisma/schema.prisma
+      - run: npm run licenses:check
+      - run: npm run security-configs:check
+      - run: npm audit --audit-level=high
+      - run: npm audit --omit=dev --audit-level=high
+      - name: Generate CycloneDX SBOM
+        run: |
+          npm sbom --sbom-format cyclonedx > knewstudio-sbom.cdx.json
+          node -e "JSON.parse(require('fs').readFileSync('knewstudio-sbom.cdx.json', 'utf8'))"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: knewstudio-sbom
+          path: knewstudio-sbom.cdx.json
+          retention-days: 30
+
+  compose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Validate bundled Compose
+        run: |
+          docker compose --env-file .env.example config --format json > /tmp/knewstudio-compose.json
+          node scripts/check-compose-security.mjs /tmp/knewstudio-compose.json base
+      - name: Validate external-service Compose
+        env:
+          COMPOSE_PROFILES: ""
+          DATABASE_URL: postgresql://user:password@db.example:5432/knewstudio
+          REDIS_URL: rediss://user:password@cache.example:6380/0
+        run: |
+          docker compose --env-file .env.example -f docker-compose.yml -f compose.external.yml config --format json > /tmp/knewstudio-external.json
+          node scripts/check-compose-security.mjs /tmp/knewstudio-external.json base
+      - name: Validate Traefik overlay
+        run: |
+          docker compose --env-file .env.example -f docker-compose.yml -f compose.traefik.yml config --format json > /tmp/knewstudio-traefik.json
+          node scripts/check-compose-security.mjs /tmp/knewstudio-traefik.json traefik
+      - name: Validate standalone Traefik and Socket Proxy
+        run: |
+          docker compose -f deploy/traefik-compose.yml.example config --format json > /tmp/knewstudio-traefik-standalone.json
+          node scripts/check-compose-security.mjs /tmp/knewstudio-traefik-standalone.json standalone
+      - name: Validate secrets overlay
+        env:
+          SECRETS_DIR: /tmp/knewstudio-secrets
+        run: |
+          mkdir -p /tmp/knewstudio-secrets
+          touch /tmp/knewstudio-secrets/{postgres_password,redis_password,database_url,redis_url,provider_secret_key,mfa_secret_key,bootstrap_admin_password}
+          docker compose --env-file .env.example -f docker-compose.yml -f compose.secrets.yml config --quiet
+
+  container-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build API for amd64 and arm64
+        run: docker buildx build --platform linux/amd64,linux/arm64 --target api --output type=cacheonly .
+      - name: Build Web for amd64 and arm64
+        run: docker buildx build --platform linux/amd64,linux/arm64 --target web --output type=cacheonly .
+      - name: Validate generated Nginx configuration
+        run: |
+          docker build --target web -t knewstudio-web:test .
+          docker run --rm -e FORWARDED_HEADERS_MODE=ignore knewstudio-web:test nginx -t
+          docker run --rm -e FORWARDED_HEADERS_MODE=trusted-single-proxy knewstudio-web:test nginx -t
+
+  secret-scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  image-scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: docker build --target api -t knewstudio-api:scan .
+      - run: docker build --target web -t knewstudio-web:scan .
+      - uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: knewstudio-api:scan
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+      - uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: knewstudio-web:scan
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL

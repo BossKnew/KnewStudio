@@ -1,0 +1,22 @@
+# Replace the hostname. Caddy obtains and renews a public certificate.
+# KnewStudio must use HTTP_BIND_ADDRESS=127.0.0.1 and
+# FORWARDED_HEADERS_MODE=trusted-single-proxy.
+
+studio.example.com {
+  header Strict-Transport-Security "max-age=31536000"
+
+  request_body {
+    max_size 21MB
+  }
+
+  reverse_proxy 127.0.0.1:8080 {
+    header_up X-Real-IP {remote_host}
+    header_up X-Forwarded-For {remote_host}
+    header_up X-Forwarded-Proto https
+    flush_interval -1
+    transport http {
+      dial_timeout 10s
+      response_header_timeout 20m
+    }
+  }
+}
