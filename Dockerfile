@@ -59,5 +59,6 @@ USER node
 CMD ["node", "--require", "./apps/api/dist/load-secret-files.js", "node_modules/prisma/build/index.js", "migrate", "deploy", "--schema", "apps/api/prisma/schema.prisma"]
 
 FROM nginx:1.28-alpine AS web
+RUN apk upgrade --no-cache
 COPY deploy/nginx.conf /etc/nginx/templates/default.conf.template
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
