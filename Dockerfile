@@ -17,10 +17,13 @@ COPY apps/web/package.json apps/web/package.json
 RUN npm ci --omit=dev --workspace @knewstudio/api --include-workspace-root && npm cache clean --force
 
 FROM api-deps AS api-runtime-deps
-RUN npm pkg delete devDependencies.prisma devDependencies.typescript --workspace @knewstudio/api \
+RUN npm pkg delete dependencies.prisma devDependencies.typescript --workspace @knewstudio/api \
     && npm prune --omit=dev --omit=peer --workspace @knewstudio/api --include-workspace-root \
     && rm -rf node_modules/prisma node_modules/@prisma/engines node_modules/typescript node_modules/esbuild node_modules/@esbuild \
     && npm cache clean --force \
+    && rm -rf /usr/local/lib/node_modules/npm \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx \
+    && test ! -e /usr/local/lib/node_modules/npm \
     && test ! -e node_modules/prisma \
     && test ! -e node_modules/@prisma/engines \
     && test ! -e node_modules/typescript \
@@ -47,9 +50,15 @@ FROM api-deps AS migrate
 ENV NODE_ENV=production
 COPY --from=build /app/apps/api/dist/load-secret-files.js ./apps/api/dist/load-secret-files.js
 COPY --from=build /app/apps/api/prisma ./apps/api/prisma
+RUN test -f node_modules/prisma/build/index.js \
+    && node node_modules/prisma/build/index.js --version \
+    && rm -rf /usr/local/lib/node_modules/npm \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx \
+    && test ! -e /usr/local/lib/node_modules/npm
 USER node
 CMD ["node", "--require", "./apps/api/dist/load-secret-files.js", "node_modules/prisma/build/index.js", "migrate", "deploy", "--schema", "apps/api/prisma/schema.prisma"]
 
-FROM nginx:1.28-alpine AS web
+FROM nginx:1.31-alpine AS web
+RUN apk upgrade --no-cache
 COPY deploy/nginx.conf /etc/nginx/templates/default.conf.template
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html

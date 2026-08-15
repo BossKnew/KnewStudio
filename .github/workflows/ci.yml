@@ -85,6 +85,8 @@ jobs:
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Build API for amd64 and arm64
         run: docker buildx build --platform linux/amd64,linux/arm64 --target api --output type=cacheonly .
+      - name: Build migration runner for amd64 and arm64
+        run: docker buildx build --platform linux/amd64,linux/arm64 --target migrate --output type=cacheonly .
       - name: Build Web for amd64 and arm64
         run: docker buildx build --platform linux/amd64,linux/arm64 --target web --output type=cacheonly .
       - name: Validate generated Nginx configuration
@@ -96,6 +98,9 @@ jobs:
   secret-scan:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -110,10 +115,18 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: docker build --target api -t knewstudio-api:scan .
+      - run: docker build --target migrate -t knewstudio-migrate:scan .
       - run: docker build --target web -t knewstudio-web:scan .
       - uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: knewstudio-api:scan
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+      - uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: knewstudio-migrate:scan
           format: table
           exit-code: "1"
           ignore-unfixed: true
