@@ -50,6 +50,6 @@ COPY --from=build /app/apps/api/prisma ./apps/api/prisma
 USER node
 CMD ["node", "--require", "./apps/api/dist/load-secret-files.js", "node_modules/prisma/build/index.js", "migrate", "deploy", "--schema", "apps/api/prisma/schema.prisma"]
 
-FROM nginx:1.28-alpine AS web
+FROM nginx:1.31-alpine AS web
 COPY deploy/nginx.conf /etc/nginx/templates/default.conf.template
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
