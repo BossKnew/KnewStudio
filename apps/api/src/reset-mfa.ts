@@ -7,7 +7,7 @@ async function main() {
   const [username, confirmation] = process.argv.slice(2);
   if (!username || confirmation !== username) throw new Error('用法：npm run mfa:reset -- <username> <同一 username 再确认一次>');
   const prisma = new PrismaClient();
-  const redis = new Redis(redisUrl(), { maxRetriesPerRequest: 1 });
+  const redis = new Redis(redisUrl(), { maxRetriesPerRequest: 1, protocol: 2 });
   try {
     const user = await prisma.user.findUnique({ where: { username }, select: { id: true, username: true } });
     if (!user) throw new Error('用户不存在');
@@ -16,7 +16,7 @@ async function main() {
       prisma.auditLog.create({ data: { action: 'operator.user.mfa.reset', targetType: 'user', targetId: user.id, metadata: { username: user.username } } }),
     ]);
     const sessionsKey = `user_sessions:v2:${user.id}`;
-    const sessions = await redis.zrange(sessionsKey, 0, -1);
+    const sessions = await redis.zrange(sessionsKey, '0', '-1');
     const tx = redis.multi();
     sessions.forEach((digest) => tx.del(`session:v2:${digest}`));
     tx.del(sessionsKey);
