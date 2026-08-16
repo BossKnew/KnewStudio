@@ -12,6 +12,7 @@ export class RedisService implements OnModuleDestroy {
       commandTimeout: 5_000,
       maxRetriesPerRequest: 1,
       enableOfflineQueue: false,
+      protocol: 2,
     });
   }
 
