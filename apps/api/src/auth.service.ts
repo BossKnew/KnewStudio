@@ -173,7 +173,7 @@ export class AuthService implements OnModuleInit {
       .zadd(sessionsKey, Date.now(), digest)
       .expire(sessionsKey, SESSION_INDEX_SECONDS)
       .exec();
-    const expired = await this.redis.client.zrange(sessionsKey, 0, -11);
+    const expired = await this.redis.client.zrange(sessionsKey, '0', '-11');
     if (expired.length) {
       const tx = this.redis.client.multi().zrem(sessionsKey, ...expired);
       expired.forEach((item) => tx.del(`${SESSION_PREFIX}${item}`));
@@ -221,7 +221,7 @@ export class AuthService implements OnModuleInit {
   }
 
   async revokeUser(userId: string) {
-    const tokens = await this.redis.client.zrange(`${USER_SESSIONS_PREFIX}${userId}`, 0, -1);
+    const tokens = await this.redis.client.zrange(`${USER_SESSIONS_PREFIX}${userId}`, '0', '-1');
     const tx = this.redis.client.multi();
     tokens.forEach((token) => tx.del(`${SESSION_PREFIX}${token}`));
     tx.del(`${USER_SESSIONS_PREFIX}${userId}`);
