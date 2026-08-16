@@ -2,14 +2,33 @@ version: 2
 updates:
   - package-ecosystem: npm
     directory: /
-    schedule: { interval: weekly }
+    schedule:
+      interval: weekly
     groups:
-      npm-dependencies: { patterns: ["*"] }
+      npm-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "prisma"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "@prisma/client"
+        update-types:
+          - version-update:semver-major
+
   - package-ecosystem: github-actions
     directory: /
-    schedule: { interval: weekly }
+    schedule:
+      interval: weekly
     groups:
-      github-actions: { patterns: ["*"] }
+      github-actions:
+        patterns:
+          - "*"
+
   - package-ecosystem: docker
     directory: /
-    schedule: { interval: weekly }
+    schedule:
+      interval: weekly
