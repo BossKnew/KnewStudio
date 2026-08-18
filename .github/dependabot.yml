@@ -1,0 +1,118 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Ho_Chi_Minh
+    open-pull-requests-limit: 5
+    versioning-strategy: increase
+    cooldown:
+      semver-patch-days: 3
+      semver-minor-days: 7
+      semver-major-days: 30
+      include:
+        - "*"
+    groups:
+      nestjs:
+        patterns:
+          - "@nestjs/*"
+        update-types:
+          - minor
+          - patch
+      prisma:
+        patterns:
+          - prisma
+          - "@prisma/*"
+        update-types:
+          - minor
+          - patch
+      queues:
+        patterns:
+          - bullmq
+          - ioredis
+        update-types:
+          - minor
+          - patch
+      react:
+        patterns:
+          - react
+          - react-dom
+          - "@types/react"
+          - "@types/react-dom"
+        update-types:
+          - minor
+          - patch
+      npm-patch-and-minor:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Ho_Chi_Minh
+    groups:
+      application-images:
+        patterns:
+          - node
+          - nginx
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: node
+        update-types:
+          - version-update:semver-major
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Ho_Chi_Minh
+    groups:
+      data-services:
+        patterns:
+          - postgres
+          - redis
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: postgres
+        update-types:
+          - version-update:semver-major
+      - dependency-name: redis
+        update-types:
+          - version-update:semver-major
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Ho_Chi_Minh
+    groups:
+      github-actions-patch-and-minor:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

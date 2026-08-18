@@ -1,0 +1,26 @@
+{
+  "name": "@knewstudio/web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "KnewStudio web client.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --configLoader runner",
+    "build": "vite build --configLoader runner",
+    "preview": "vite preview --configLoader runner",
+    "test": "node --test lib/*.test.ts",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.1"
+  }
+}
