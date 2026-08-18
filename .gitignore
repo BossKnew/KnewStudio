@@ -1,0 +1,31 @@
+# Dependencies and build output
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+coverage/
+**/coverage/
+*.tsbuildinfo
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+secrets/
+*.secret
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Generated sources and runtime data
+apps/api/src/generated/prisma/
+media/
+*.log
+*-sbom.cdx.json
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

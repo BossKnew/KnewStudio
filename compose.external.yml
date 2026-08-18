@@ -1,0 +1,12 @@
+services:
+  postgres:
+    profiles: [bundled]
+  redis:
+    profiles: [bundled]
+  migrate:
+    depends_on:
+      postgres: { condition: service_healthy, required: false }
+  api:
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy, required: false }

@@ -1,0 +1,26 @@
+services:
+  nginx:
+    ports: !reset []
+    environment:
+      FORWARDED_HEADERS_MODE: trusted-single-proxy
+    networks: [app, proxy]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:-proxy}
+      traefik.http.routers.knewstudio.rule: Host(`${APP_HOST:?Set APP_HOST for the Traefik router}`)
+      traefik.http.routers.knewstudio.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.knewstudio.tls: "true"
+      traefik.http.routers.knewstudio.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      traefik.http.routers.knewstudio.middlewares: knewstudio-security-headers
+      traefik.http.middlewares.knewstudio-security-headers.headers.stsSeconds: "31536000"
+      traefik.http.middlewares.knewstudio-security-headers.headers.contentTypeNosniff: "true"
+      traefik.http.middlewares.knewstudio-security-headers.headers.frameDeny: "true"
+      traefik.http.services.knewstudio.loadbalancer.server.port: "80"
+  api:
+    environment:
+      FORWARDED_HEADERS_MODE: trusted-single-proxy
+
+networks:
+  proxy:
+    external: true
+    name: ${TRAEFIK_NETWORK:-proxy}

@@ -1,0 +1,64 @@
+# Optional standalone Traefik. KnewStudio joins the external `proxy` network
+# through compose.traefik.yml. Only the restricted Socket Proxy can access the
+# Docker socket; Traefik itself never receives the host socket.
+services:
+  socket-proxy:
+    # v0.5.0 is intentionally avoided until its Docker /version regression is fixed.
+    image: ghcr.io/tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476
+    restart: unless-stopped
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    pids_limit: 64
+    environment:
+      CONTAINERS: "1"
+      EVENTS: "1"
+      NETWORKS: "1"
+      PING: "1"
+      VERSION: "1"
+      POST: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [socket_api]
+    tmpfs:
+      - /run:rw,noexec,nosuid,size=2m
+      - /tmp:rw,noexec,nosuid,size=2m
+      - /var/lib/haproxy:rw,noexec,nosuid,size=2m
+
+  traefik:
+    image: traefik:v3.5
+    restart: unless-stopped
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    pids_limit: 128
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=proxy
+      - --providers.docker.endpoint=tcp://socket-proxy:2375
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.letsencrypt.acme.email=admin@example.com
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports: [80:80, 443:443]
+    volumes:
+      - letsencrypt:/letsencrypt
+    networks: [proxy, socket_api]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=8m
+    depends_on: [socket-proxy]
+
+networks:
+  proxy:
+    name: proxy
+    external: true
+  socket_api:
+    internal: true
+
+volumes:
+  letsencrypt:
