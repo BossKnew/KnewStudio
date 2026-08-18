@@ -1,107 +1,103 @@
 # KnewStudio
 
-版本：v0.1.0
+[简体中文](README_zh.md)
 
-贡献者：BossKnew
+KnewStudio is a self-hosted image-generation workspace for teams. It supports OpenAI Images-compatible providers, text-to-image generation, full-image editing, masked inpainting, asset management, and an administration console with user groups and model permissions.
 
-版权所有：KnewVerse
+## Features
 
-KnewStudio 是一个面向团队的自托管图片生成工作台。它提供 OpenAI Images 兼容供应商接入、文生图、整图编辑、局部重绘、素材管理，以及带用户组和模型权限的管理后台。
+- OpenAI Images-compatible provider and model configuration
+- Text-to-image generation, reference-image editing, and masked inpainting
+- Conversations, generation history, asset library, thumbnails, and storage quotas
+- User approval, user groups, and model access control
+- Mandatory administrator MFA, TOTP, recovery codes, and session revocation
+- Encrypted storage for API keys and MFA secrets
+- SSRF protection for outbound requests, rate limiting, CSRF protection, and security headers
+- PostgreSQL, Redis, background job queues, and Docker Compose deployment
+- Chinese and English user interfaces
 
-## 功能
+The current release supports image generation only. Video adapter interfaces are reserved in the codebase but are not exposed as product features.
 
-- OpenAI Images 兼容供应商与模型配置
-- 文生图、参考图编辑和蒙版局部重绘
-- 会话、生成历史、素材库、缩略图与存储配额
-- 用户审批、用户组和模型访问控制
-- 管理员强制 MFA、TOTP、恢复码和会话撤销
-- API Key 与 MFA 密钥加密存储
-- 出站请求 SSRF 防护、速率限制、CSRF 与安全响应头
-- PostgreSQL、Redis、后台任务队列和 Docker Compose 部署
-- 中文、英文界面
+## Technology Stack
 
-当前版本只实现图片生成。代码中预留的视频适配器接口尚未作为产品功能开放。
+- Web: React 19, Vite, and TypeScript
+- API: NestJS, Prisma, PostgreSQL, Redis, and BullMQ
+- Deployment: Docker Compose and Nginx, with optional Traefik or an external reverse proxy
 
-## 技术栈
+## Quick Start
 
-- Web：React 19、Vite、TypeScript
-- API：NestJS、Prisma、PostgreSQL、Redis、BullMQ
-- 部署：Docker Compose、Nginx，可选 Traefik 或外部反向代理
+### Requirements
 
-## 快速开始
+- Docker Engine and Docker Compose v2.24 or later
+- OpenSSL for generating random secrets
+- At least 2 CPUs and 4 GiB of memory are recommended for the default resource profile
 
-### 环境要求
+### 1. Configure the environment
 
-- Docker Engine 与 Docker Compose v2.24 或更新版本
-- 用于生成随机密钥的 OpenSSL
-- 默认资源配置建议至少 2 CPU、4 GiB 内存
-
-### 1. 配置环境变量
-
-Linux/macOS：
+Linux/macOS:
 
 ```bash
 cp .env.example .env
 ```
 
-PowerShell：
+PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-编辑 `.env`，替换所有包含 `change-me` 的值。各用途的密钥必须独立生成，不能复用：
+Edit `.env` and replace every value containing `change-me`. Use a different secret for each purpose:
 
 ```bash
 openssl rand -hex 32
 openssl rand -base64 32
 ```
 
-`PROVIDER_SECRET_KEY` 和 `MFA_SECRET_KEY` 都必须是独立的 32 字节 Base64 密钥。
+`PROVIDER_SECRET_KEY` and `MFA_SECRET_KEY` must be independent 32-byte Base64 keys.
 
-### 2. 校验并启动
+### 2. Validate and start
 
 ```bash
 docker compose config --quiet
 docker compose up -d --build
 ```
 
-默认地址为 <http://localhost:8080>。首次登录使用 `.env` 中的引导管理员账号；系统会要求修改初始密码并绑定 MFA。
+The default address is <http://localhost:8080>. Sign in with the bootstrap administrator account from `.env`; the system will require a password change and MFA enrollment.
 
-完成首次登录后，从 `.env` 删除 `BOOTSTRAP_ADMIN_USERNAME` 和 `BOOTSTRAP_ADMIN_PASSWORD`，然后重新创建 API 容器：
+After the first login, remove `BOOTSTRAP_ADMIN_USERNAME` and `BOOTSTRAP_ADMIN_PASSWORD` from `.env`, then recreate the API container:
 
 ```bash
 docker compose up -d --force-recreate api
 ```
 
-查看状态与日志：
+View service status and logs:
 
 ```bash
 docker compose ps
 docker compose logs -f --tail=200
 ```
 
-## 生产部署
+## Production Deployment
 
-不要把默认的明文 HTTP 配置暴露到公网。生产环境至少需要：
+Do not expose the default plain-HTTP configuration to the public internet. At minimum, production deployments should:
 
-- 将 `APP_ORIGINS` 设置为准确的 HTTPS Origin，例如 `https://studio.example.com`
-- 设置 `ALLOW_INSECURE_HTTP=false`
-- 使用独立、高强度的数据库、Redis、加密和管理员密码
-- 只允许受信任的反向代理访问应用入口
-- 定期备份 PostgreSQL 数据和 `MEDIA_VOLUME`
+- Set `APP_ORIGINS` to the exact HTTPS origin, such as `https://studio.example.com`
+- Set `ALLOW_INSECURE_HTTP=false`
+- Use separate, high-strength database, Redis, encryption, and administrator credentials
+- Allow only trusted reverse proxies to access the application entry point
+- Back up PostgreSQL data and `MEDIA_VOLUME` regularly
 
 ### Traefik
 
-先创建 `.env` 中指定的外部 Traefik 网络，并设置 `APP_HOST`、`TRAEFIK_NETWORK`、`TRAEFIK_ENTRYPOINT` 和 `TRAEFIK_CERT_RESOLVER`，然后运行：
+Create the external Traefik network specified in `.env`, set `APP_HOST`, `TRAEFIK_NETWORK`, `TRAEFIK_ENTRYPOINT`, and `TRAEFIK_CERT_RESOLVER`, then run:
 
 ```bash
 docker compose -f docker-compose.yml -f compose.traefik.yml up -d --build
 ```
 
-### 外部 PostgreSQL 和 Redis
+### External PostgreSQL and Redis
 
-在 `.env` 中设置 `DATABASE_URL` 与 `REDIS_URL`，然后使用外部服务 overlay：
+Set `DATABASE_URL` and `REDIS_URL` in `.env`, then use the external-services overlay:
 
 ```bash
 docker compose -f docker-compose.yml -f compose.external.yml up -d --build
@@ -109,19 +105,19 @@ docker compose -f docker-compose.yml -f compose.external.yml up -d --build
 
 ### Compose secrets
 
-将所需秘密分别写入 `SECRETS_DIR` 下的文件，并使用：
+Write each required secret to a separate file under `SECRETS_DIR`, then run:
 
 ```bash
 docker compose -f docker-compose.yml -f compose.secrets.yml up -d --build
 ```
 
-可组合多个 overlay；最终启动前始终先运行 `docker compose ... config --quiet`。
+Overlays can be combined. Always run `docker compose ... config --quiet` before starting the final configuration.
 
-更多反向代理示例位于 [`deploy`](deploy) 目录。
+More reverse-proxy examples are available in the [`deploy`](deploy) directory.
 
-## 本地开发
+## Local Development
 
-环境要求：Node.js 24、npm 11、PostgreSQL 和 Redis。
+Requirements: Node.js 24, npm 11, PostgreSQL, and Redis.
 
 ```bash
 npm ci
@@ -129,14 +125,14 @@ npm run db:generate
 npm run dev
 ```
 
-本地 `.env` 需要提供可从宿主机访问的 `DATABASE_URL` 和 `REDIS_URL`。开发服务器默认使用：
+Your local `.env` must provide `DATABASE_URL` and `REDIS_URL` values reachable from the host. Development servers use:
 
-- Web：<http://localhost:5173>
-- API：<http://localhost:4000>
+- Web: <http://localhost:5173>
+- API: <http://localhost:4000>
 
-Vite 会把 `/api` 请求代理到本地 API。
+Vite proxies `/api` requests to the local API.
 
-## 质量检查
+## Quality Checks
 
 ```bash
 npm run lint
@@ -147,16 +143,14 @@ npm run security-configs:check
 npm audit --audit-level=high
 ```
 
-GitHub Actions 还会构建完整容器栈并检查公开健康端点。
+GitHub Actions also builds the complete container stack and checks the public health endpoint.
 
-## 安全
+## Security
 
-不要提交 `.env`、`secrets/`、私钥、数据库备份或运行时媒体文件。项目默认已在 `.gitignore` 和 `.dockerignore` 中排除这些内容。
+Do not commit `.env`, `secrets/`, private keys, database backups, or runtime media files. The project excludes these by default through `.gitignore` and `.dockerignore`.
 
-安全问题请按照 [`SECURITY.md`](SECURITY.md) 私下报告，不要在公开 Issue 中披露可利用细节。
+Report security issues privately according to [`SECURITY.md`](SECURITY.md). Do not disclose exploitable details in public issues.
 
-## 许可证
+## License
 
-本项目采用 [Apache License 2.0](LICENSE)。
-
-版权归 KnewVerse 所有，项目贡献者为 BossKnew。详细归属信息见 [`NOTICE`](NOTICE)。
+This project is licensed under the [Apache License 2.0](LICENSE).
