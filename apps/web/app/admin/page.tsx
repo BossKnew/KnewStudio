@@ -10,16 +10,16 @@ import { LanguageSwitcher, useI18n } from '@/lib/i18n';
 type AdminView = 'users' | 'groups' | 'providers' | 'models' | 'security';
 type Provider = { id: string; name: string; baseUrl: string; timeoutSeconds: number; enabled: boolean; testCooldownUntil: string | null; lastTestOk: boolean | null };
 type UserGroup = { id: string; name: string; description: string | null; _count: { users: number; models: number } };
-type AdminModel = { id: string; providerId: string; displayName: string; upstreamModelId: string; allowedSizes: string[]; allowedQualities: string[]; supportsEdit: boolean; supportsInpaint: boolean; maxImages: number; enabled: boolean; provider: { id: string; name: string }; allowedGroups: Array<{ groupId: string; group: { id: string; name: string } }> };
+type AdminModel = { id: string; providerId: string; displayName: string; upstreamModelId: string; allowedSizes: string[]; allowedQualities: string[]; supportsEdit: boolean; supportsInpaint: boolean; maxImages: number; maxInputImages: number; enabled: boolean; provider: { id: string; name: string }; allowedGroups: Array<{ groupId: string; group: { id: string; name: string } }> };
 type ProviderForm = { name: string; baseUrl: string; apiKey: string; timeoutSeconds: number };
-type ModelForm = { providerId: string; displayName: string; upstreamModelId: string; allowedSizes: string; allowedQualities: string; supportsEdit: boolean; supportsInpaint: boolean; maxImages: number; allowedGroupIds: string[] };
+type ModelForm = { providerId: string; displayName: string; upstreamModelId: string; allowedSizes: string; allowedQualities: string; supportsEdit: boolean; supportsInpaint: boolean; maxImages: number; maxInputImages: number; allowedGroupIds: string[] };
 type GroupForm = { name: string; description: string };
 type Notice = { kind: 'success' | 'error'; message: string };
 type AdminUser = { id: string; username: string; displayName: string; role: 'USER' | 'ADMIN'; status: string; groups: Array<{ id: string; name: string }>; mfaEnabled: boolean; mfaRequired: boolean; _count: { jobs: number; conversations: number; assets: number }; storageBytes: string };
 type AdminSettings = { registrationEnabled: boolean; userSessionDuration?: string };
 
 const emptyProviderForm = (): ProviderForm => ({ name: '', baseUrl: '', apiKey: '', timeoutSeconds: 180 });
-const emptyModelForm = (): ModelForm => ({ providerId: '', displayName: '', upstreamModelId: '', allowedSizes: '', allowedQualities: 'auto,low,medium,high', supportsEdit: false, supportsInpaint: false, maxImages: 1, allowedGroupIds: [] });
+const emptyModelForm = (): ModelForm => ({ providerId: '', displayName: '', upstreamModelId: '', allowedSizes: '', allowedQualities: 'auto,low,medium,high', supportsEdit: false, supportsInpaint: false, maxImages: 1, maxInputImages: 1, allowedGroupIds: [] });
 const emptyGroupForm = (): GroupForm => ({ name: '', description: '' });
 
 export default function AdminPage() {
@@ -179,6 +179,7 @@ export default function AdminPage() {
       supportsEdit: item.supportsEdit,
       supportsInpaint: item.supportsInpaint,
       maxImages: item.maxImages,
+      maxInputImages: item.maxInputImages,
       allowedGroupIds: item.allowedGroups.map(({ groupId }) => groupId),
     });
     setError('');
@@ -368,7 +369,8 @@ export default function AdminPage() {
           <input className="field" required placeholder={t('真实模型 ID')} value={modelForm.upstreamModelId} onChange={(event) => setModelForm({ ...modelForm, upstreamModelId: event.target.value })} />
           <input className="field" placeholder={t('尺寸，逗号分隔；留空默认 auto')} value={modelForm.allowedSizes} onChange={(event) => setModelForm({ ...modelForm, allowedSizes: event.target.value })} />
           <input className="field" required placeholder={t('质量，逗号分隔')} value={modelForm.allowedQualities} onChange={(event) => setModelForm({ ...modelForm, allowedQualities: event.target.value })} />
-          <label>{t('单次生成数量上限')} <input className="field" type="number" min="1" max="4" value={modelForm.maxImages} onChange={(event) => setModelForm({ ...modelForm, maxImages: Number(event.target.value) })} /></label>
+           <label>{t('单次生成数量上限')} <input className="field" type="number" min="1" max="4" value={modelForm.maxImages} onChange={(event) => setModelForm({ ...modelForm, maxImages: Number(event.target.value) })} /></label>
+           <label>{t('单次最多参考图数量')} <input className="field" type="number" min="1" max="8" value={modelForm.maxInputImages} onChange={(event) => setModelForm({ ...modelForm, maxInputImages: Number(event.target.value) })} /></label>
           <label><input type="checkbox" checked={modelForm.supportsEdit} onChange={(event) => setModelForm({ ...modelForm, supportsEdit: event.target.checked })} /> {t('整图编辑')}</label>
           <label><input type="checkbox" checked={modelForm.supportsInpaint} onChange={(event) => setModelForm({ ...modelForm, supportsInpaint: event.target.checked })} /> {t('局部重绘')}</label>
           <fieldset className="permission-fieldset"><legend>{t('可用用户组')}</legend><p className="muted">{t('不勾选表示模型为私有，仅管理员可用；管理员始终拥有访问权限。')}</p><div className="permission-options">{groups.map((group) => <label key={group.id}><input type="checkbox" checked={modelForm.allowedGroupIds.includes(group.id)} onChange={(event) => toggleModelGroup(group.id, event.target.checked)} /> {group.name}</label>)}{groups.length === 0 && <span className="muted">{t('尚未创建用户组')}</span>}</div></fieldset>

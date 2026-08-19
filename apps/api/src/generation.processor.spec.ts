@@ -124,19 +124,21 @@ describe('GenerationProcessor mask lifecycle', () => {
     const storage = new StorageService();
     const input = await sharp({ create: { width: 16, height: 16, channels: 4, background: '#fff' } }).png().toBuffer();
     const sourceStored = await stageAndSave(storage, 'user-1', input, 'image/png');
+    const sourceStored2 = await stageAndSave(storage, 'user-1', input, 'image/png');
     const maskStored = await stageAndSave(storage, 'user-1', input, 'image/png');
     const job = {
       id: 'job-1', userId: 'user-1', status: 'QUEUED', mode: 'INPAINT', user: { status: 'ACTIVE' },
       model: { upstreamModelId: 'image-model', provider: { baseUrl: 'https://api.example.com/v1', encryptedApiKey: 'encrypted', encryptedHeaders: null, timeoutSeconds: 30 } },
-      parameters: { sourceAssetIds: ['source-1'], maskAssetId: 'mask-1', size: '1024x1024', count: 1 }, prompt: 'replace the sky',
+      parameters: { sourceAssetIds: ['source-1', 'source-2'], maskAssetId: 'mask-1', size: '1024x1024', count: 1 }, prompt: 'replace the sky',
     };
     const prisma: any = {
       generationJob: { findUnique: jest.fn().mockResolvedValueOnce(job).mockResolvedValueOnce({ status: 'RUNNING' }), update: jest.fn().mockResolvedValue({}), updateMany: jest.fn() },
       user: { findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }) },
       asset: {
-        findFirst: jest.fn()
-          .mockResolvedValueOnce({ id: 'source-1', objectKey: sourceStored.objectKey, mimeType: 'image/png', originalName: 'source.png' })
-          .mockResolvedValueOnce({ id: 'mask-1', objectKey: maskStored.objectKey, mimeType: 'image/png', originalName: 'mask.png' }),
+          findFirst: jest.fn()
+            .mockResolvedValueOnce({ id: 'source-1', objectKey: sourceStored.objectKey, mimeType: 'image/png', originalName: 'source.png' })
+            .mockResolvedValueOnce({ id: 'source-2', objectKey: sourceStored2.objectKey, mimeType: 'image/png', originalName: 'source-2.png' })
+            .mockResolvedValueOnce({ id: 'mask-1', objectKey: maskStored.objectKey, mimeType: 'image/png', originalName: 'mask.png' }),
       },
     };
     const http: any = {
@@ -156,7 +158,9 @@ describe('GenerationProcessor mask lifecycle', () => {
     expect(requestBody.has('image[]')).toBe(true);
     expect(requestBody.has('image')).toBe(false);
     expect(requestBody.has('mask')).toBe(true);
-    expect(requestBody.get('image[]')).toMatchObject({ name: 'source.png', type: 'image/png' });
+    expect(requestBody.getAll('image[]')).toHaveLength(2);
+    expect(requestBody.getAll('image[]')[0]).toMatchObject({ name: 'source.png', type: 'image/png' });
+    expect(requestBody.getAll('image[]')[1]).toMatchObject({ name: 'source-2.png', type: 'image/png' });
     expect(requestBody.get('mask')).toMatchObject({ name: 'mask.png', type: 'image/png' });
     const serializedRequest = new Request('https://api.example.com/v1/images/edits', { method: 'POST', body: requestBody as any });
     expect(serializedRequest.headers.get('content-type')).toMatch(/^multipart\/form-data; boundary=/);

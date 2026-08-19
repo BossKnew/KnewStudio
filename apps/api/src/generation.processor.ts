@@ -274,7 +274,7 @@ export class GenerationProcessor extends WorkerHost {
         const form = new UndiciFormData();
         for (const [key, value] of Object.entries(requestParameters)) form.set(key, String(value));
         let firstSource: Awaited<ReturnType<GenerationProcessor['ownedAsset']>> | undefined;
-        for (const assetId of params.sourceAssetIds) {
+        for (const assetId of Array.isArray(params.sourceAssetIds) ? params.sourceAssetIds : []) {
           const asset = await this.ownedAsset(job.userId, assetId);
           firstSource ??= asset;
           form.append('image[]', await openAsBlob(this.storage.filePath(asset.objectKey), { type: asset.mimeType }), asset.originalName ?? 'image.png');

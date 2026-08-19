@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from '@/lib/router';
 import { api, json } from '@/lib/api';
+import { downloadFiles, type DownloadResult } from '@/lib/download';
 import { isTerminalGenerationStatus, parseGenerationEvent } from '@/lib/generation-events';
-import { getActiveGenerationJobs, type Asset, type ConversationDetail, type ConversationSummary, type CursorPage, type GenerationCreated, type GenerationJob, type StudioModel, type StudioUser } from '@/lib/studio-types';
+import { getActiveGenerationJobs, type Asset, type ConversationDetail, type ConversationSummary, type CursorPage, type DownloadAsset, type GenerationCreated, type GenerationJob, type GenerationReuse, type ReferenceSelection, type StudioModel, type StudioUser } from '@/lib/studio-types';
 import AssetLibrary from '@/components/AssetLibrary';
 import ImageLightbox, { type LightboxImage } from '@/components/ImageLightbox';
 import JobHistory from '@/components/JobHistory';
@@ -31,7 +32,8 @@ export default function StudioPage() {
   const [view, setView] = useState<StudioView>('studio');
   const [conversationId, setConversationId] = useState('');
   const [conversation, setConversation] = useState<ConversationDetail | null>(null);
-  const [sourceAsset, setSourceAsset] = useState<Asset | null>(null);
+  const [references, setReferences] = useState<ReferenceSelection[]>([]);
+  const [reusePreset, setReusePreset] = useState<GenerationReuse | null>(null);
   const [viewer, setViewer] = useState<ViewerState | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(null);
@@ -144,6 +146,8 @@ export default function StudioPage() {
     selectedConversationRef.current = '';
     setConversationId('');
     setConversation(null);
+    setReferences([]);
+    setReusePreset(null);
   }
 
   async function renameConversation(id: string, title: string) {
@@ -163,7 +167,7 @@ export default function StudioPage() {
       setConversations((items) => items.filter((item) => item.id !== deleteTarget.id));
       setAssets((items) => items.filter((asset) => !deletedAssetIds.has(asset.id)));
       setAssetTotal((total) => Math.max(0, total - deletedAssetIds.size));
-      if (sourceAsset && deletedAssetIds.has(sourceAsset.id)) setSourceAsset(null);
+      setReferences((current) => current.filter((reference) => reference.kind !== 'asset' || !deletedAssetIds.has(reference.asset.id)));
       if (viewer && deletedAssetIds.has(viewer.image.id)) setViewer(null);
       if (selectedConversationRef.current === deleteTarget.id) startNewCreation();
       setDeleteTarget(null);
@@ -192,6 +196,18 @@ export default function StudioPage() {
   async function retryGeneration(jobId: string) {
     const result = await api<GenerationCreated>(`/generations/${jobId}/retry`, json('POST'));
     await loadConversation(result.conversationId);
+  }
+
+  async function reuseGeneration(jobId: string) {
+    const preset = await api<GenerationReuse>(`/generations/${jobId}/reuse`);
+    setView('studio');
+    setReusePreset(preset);
+  }
+
+  async function downloadConversation(id: string): Promise<DownloadResult> {
+    const result = await api<{ items: DownloadAsset[]; total: number }>(`/conversations/${id}/output-assets`);
+    if (!result.items.length) throw new Error(t('当前会话没有可下载的生成图片'));
+    return downloadFiles(result.items.map((item) => ({ url: item.contentUrl, name: item.downloadName })));
   }
 
   async function loadMoreConversations() {
@@ -225,12 +241,20 @@ export default function StudioPage() {
 
   function removeAsset(asset: Asset) {
     setAssets((items) => items.filter((item) => item.id !== asset.id));
-    if (sourceAsset?.id === asset.id) setSourceAsset(null);
+    setReferences((current) => current.filter((reference) => reference.kind !== 'asset' || reference.asset.id !== asset.id));
     if (viewer?.image.id === asset.id) setViewer(null);
   }
 
-  function selectReference(asset: Asset, generationPrompt: string) {
-    setSourceAsset({ ...asset, role: 'OUTPUT', generationPrompt });
+  function selectReference(asset: Asset, generationPrompt?: string) {
+    setReferences((current) => {
+      if (current.some((reference) => reference.kind === 'asset' && reference.asset.id === asset.id)) return current;
+      if (current.length >= 8) {
+        setSyncError(t('参考图最多支持 8 张'));
+        return current;
+      }
+      const selected = generationPrompt === undefined ? asset : { ...asset, generationPrompt };
+      return [...current, { key: 'asset-' + asset.id, kind: 'asset', asset: selected }];
+    });
     setViewer(null);
   }
 
@@ -263,13 +287,13 @@ export default function StudioPage() {
     <main className="main">
       <div className="workspace-topbar"><LanguageSwitcher /></div>
       {syncError && <p className="error" role="alert">{syncError}</p>}
-      {view === 'assets' ? <AssetLibrary assets={assets} hasMore={Boolean(assetCursor)} onLoadMore={loadMoreAssets} onStartCreation={startNewCreation} onOpenAsset={(asset) => setViewer({ image: toLightboxImage(asset, t) })} onAssetNoteSaved={updateAssetNote} onAssetDeleted={removeAsset} /> : <div className={`studio-workspace ${conversationId ? 'has-conversation' : ''}`}>
-        <StudioComposer models={models} conversationId={conversationId} sourceAsset={sourceAsset} onSourceAssetChange={setSourceAsset} onCreated={handleCreated} />
-        {conversation && <JobHistory conversation={conversation} onLoadOlder={loadOlderJobs} sourceAsset={sourceAsset} onDeleteConversation={() => setDeleteTarget(conversations.find((item) => item.id === conversation.id) ?? { id: conversation.id, title: conversation.title, _count: { jobs: conversation.jobs.length } })} onUseAsReference={selectReference} onOpenImage={(asset) => setViewer({ image: toLightboxImage(asset, t), reference: asset })} onRetry={retryGeneration} />}
+      {view === 'assets' ? <AssetLibrary assets={assets} hasMore={Boolean(assetCursor)} onLoadMore={loadMoreAssets} onStartCreation={startNewCreation} onOpenAsset={(asset) => setViewer({ image: toLightboxImage(asset, t), reference: asset })} onAssetNoteSaved={updateAssetNote} onAssetDeleted={removeAsset} /> : <div className={`studio-workspace ${conversationId ? 'has-conversation' : ''}`}>
+        <StudioComposer models={models} conversationId={conversationId} references={references} onReferencesChange={setReferences} reusePreset={reusePreset} onReuseConsumed={() => setReusePreset(null)} onCreated={handleCreated} />
+        {conversation && <JobHistory conversation={conversation} onLoadOlder={loadOlderJobs} referenceIds={references.filter((reference) => reference.kind === 'asset').map((reference) => reference.asset.id)} onDeleteConversation={() => setDeleteTarget(conversations.find((item) => item.id === conversation.id) ?? { id: conversation.id, title: conversation.title, _count: { jobs: conversation.jobs.length } })} onUseAsReference={selectReference} onOpenImage={(asset) => setViewer({ image: toLightboxImage(asset, t), reference: asset })} onRetry={retryGeneration} onReuse={reuseGeneration} onDownloadConversation={downloadConversation} />}
       </div>}
     </main>
 
-    {viewer && <ImageLightbox image={viewer.image} onClose={() => setViewer(null)} onUseAsReference={viewer.reference ? () => selectReference(viewer.reference!, viewer.image.prompt ?? '') : undefined} />}
+    {viewer && <ImageLightbox image={viewer.image} onClose={() => setViewer(null)} onUseAsReference={viewer.reference ? () => selectReference(viewer.reference!, viewer.image.prompt ?? undefined) : undefined} />}
     {profileOpen && <ProfileDialog user={user} onClose={() => setProfileOpen(false)} onSaved={(displayName) => setUser((current) => current ? { ...current, displayName } : current)} />}
     {deleteTarget && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !actionBusy) setDeleteTarget(null); }}>
       <section className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-description">

@@ -1,6 +1,26 @@
 import { ConversationsController } from './conversations.controller';
 
 describe('ConversationsController asset cleanup', () => {
+  it('lists every non-deleted output in a conversation for bulk download', async () => {
+    const prisma: any = {
+      conversation: { findFirst: jest.fn().mockResolvedValue({ id: 'conversation-1' }) },
+      asset: { findMany: jest.fn().mockResolvedValue([
+        { id: 'output-1', mimeType: 'image/png', createdAt: new Date('2026-08-19T00:00:00.000Z'), deletedAt: null },
+        { id: 'output-2', mimeType: 'image/jpeg', createdAt: new Date('2026-08-19T00:00:01.000Z'), deletedAt: null },
+      ]) },
+    };
+    const controller = new ConversationsController(prisma, {} as any, {} as any);
+
+    await expect(controller.outputAssets({ id: 'user-1' } as any, 'conversation-1')).resolves.toEqual({
+      items: [
+        { id: 'output-1', mimeType: 'image/png', downloadName: 'session-0001.png', deleted: false, contentUrl: '/api/v1/assets/output-1/content', thumbnailUrl: '/api/v1/assets/output-1/content' },
+        { id: 'output-2', mimeType: 'image/jpeg', downloadName: 'session-0002.jpg', deleted: false, contentUrl: '/api/v1/assets/output-2/content', thumbnailUrl: '/api/v1/assets/output-2/content' },
+      ],
+      total: 2,
+    });
+    expect(prisma.asset.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: 'user-1', role: 'OUTPUT', deletedAt: null, job: { conversationId: 'conversation-1', userId: 'user-1' } } }));
+  });
+
   it('keeps deleted outputs in history without exposing a content URL', async () => {
     const prisma: any = { conversation: { findFirst: jest.fn().mockResolvedValue({
       id: 'conversation-1',
