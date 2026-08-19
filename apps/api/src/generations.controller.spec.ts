@@ -71,6 +71,57 @@ describe('GenerationsController retry', () => {
     expect(queue.add).not.toHaveBeenCalled();
   });
 
+  it('returns safe reusable parameters and preserves reference order', async () => {
+    prisma.generationJob.findFirst.mockResolvedValue({
+      modelId: 'model-1', mode: 'IMAGE_EDIT', prompt: 'combine these images',
+      parameters: { sourceAssetIds: ['source-2', 'source-1', 'source-2'], size: '1536x1024', quality: 'high', count: 2, maskAssetId: 'mask-1' },
+      modelSnapshot: { displayName: 'Editor', upstreamModelId: 'secret-model', providerName: 'secret-provider' },
+    });
+    prisma.asset.findMany.mockResolvedValue([
+      { id: 'source-1', role: 'UPLOAD', width: 10, height: 20, mimeType: 'image/png', sizeBytes: 2n, note: null, deletedAt: null, thumbnail: null, job: null },
+      { id: 'source-2', role: 'OUTPUT', width: 30, height: 40, mimeType: 'image/jpeg', sizeBytes: 3n, note: 'ref', deletedAt: null, thumbnail: { id: 'thumb-2', deletedAt: null }, job: { prompt: 'source prompt' } },
+    ]);
+
+    const result = await controller.reuse(user, 'job-1');
+
+    expect(result).toMatchObject({ prompt: 'combine these images', modelId: 'model-1', modelDisplayName: 'Editor', mode: 'IMAGE_EDIT', size: '1536x1024', quality: 'high', count: 2, requiresMaskRedraw: false });
+    expect(result.sourceAssets.map(({ id }) => id)).toEqual(['source-2', 'source-1']);
+    expect(JSON.stringify(result)).not.toMatch(/secret-model|secret-provider/);
+  });
+
+  it('upserts a deduplicated prompt when creating a multi-reference edit', async () => {
+    const modelId = '11111111-1111-4111-8111-111111111111';
+    const sourceId = '22222222-2222-4222-8222-222222222222';
+    const transaction: any = {
+      conversation: { create: jest.fn().mockResolvedValue({ id: 'conversation-1' }) },
+      promptEntry: { upsert: jest.fn().mockResolvedValue({}) },
+      generationJob: { create: jest.fn().mockResolvedValue({ id: 'job-1', status: 'QUEUED' }) },
+      asset: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    };
+    const createPrisma: any = {
+      model: { findFirst: jest.fn().mockResolvedValue({ id: modelId, enabled: true, mediaKind: 'IMAGE', supportsGeneration: true, supportsEdit: true, supportsInpaint: false, allowedSizes: ['1024x1024'], allowedQualities: ['standard'], maxImages: 2, maxInputImages: 2, defaults: { size: '1024x1024', quality: 'standard', count: 1 }, provider: { name: 'provider' } }) },
+      asset: { findMany: jest.fn().mockResolvedValue([{ id: sourceId }]) },
+      conversation: { update: jest.fn().mockResolvedValue({}) },
+      $transaction: jest.fn((callback: any) => callback(transaction)),
+    };
+    const createQuota: any = { reserveJobInTransaction: jest.fn().mockResolvedValue(undefined) };
+    const createController = new GenerationsController(createPrisma, queue, limits, createQuota, assets, lifecycle, events);
+
+    await createController.create(user, { modelId, prompt: '  combine these images  ', mode: 'IMAGE_EDIT', sourceAssetIds: [sourceId, sourceId] });
+
+    expect(transaction.promptEntry.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId_prompt: { userId: 'user-1', prompt: 'combine these images' } },
+    }));
+    expect(transaction.generationJob.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ parameters: expect.objectContaining({ sourceAssetIds: [sourceId] }) }) }));
+  });
+
+  it('requires every original reference to still exist before reuse', async () => {
+    prisma.generationJob.findFirst.mockResolvedValue({ modelId: 'model-1', mode: 'INPAINT', prompt: 'edit', parameters: { sourceAssetIds: ['source-1'] }, modelSnapshot: { displayName: 'Editor' } });
+    prisma.asset.findMany.mockResolvedValue([]);
+
+    await expect(controller.reuse(user, 'job-1')).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('releases the SSE quota and performs no database polling while idle', async () => {
     jest.useFakeTimers();
     let listener: ((job: any) => void) | undefined;

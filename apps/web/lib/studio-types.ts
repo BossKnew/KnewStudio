@@ -25,6 +25,7 @@ export type StudioModel = {
   allowedSizes: string[];
   allowedQualities: string[];
   maxImages: number;
+  maxInputImages: number;
   defaults: { size?: string; quality?: string; count?: number };
 };
 
@@ -37,6 +38,9 @@ export type Asset = {
   thumbnailUrl?: string | null;
   width: number | null;
   height: number | null;
+  mimeType?: string;
+  originalName?: string | null;
+  sizeBytes?: string;
   note: string | null;
   generationPrompt?: string | null;
 };
@@ -57,6 +61,39 @@ export type GenerationJob = {
 
 export type ConversationDetail = { id: string; title: string; jobs: GenerationJob[]; nextJobCursor?: string | null };
 export type GenerationCreated = { id: string; conversationId: string; status: GenerationStatus };
+
+export type ReferenceSelection =
+  | { key: string; kind: 'asset'; asset: Asset }
+  | { key: string; kind: 'file'; file: File };
+
+export type GenerationReuse = {
+  prompt: string;
+  mode: GenerationMode;
+  modelId: string | null;
+  modelDisplayName: string;
+  size: string | null;
+  quality: string | null;
+  count: number;
+  sourceAssets: Asset[];
+  requiresMaskRedraw: boolean;
+};
+
+export type PromptEntry = {
+  id: string;
+  prompt: string;
+  isFavorite: boolean;
+  usageCount: number;
+  lastUsedAt: string;
+  createdAt: string;
+};
+
+export type DownloadAsset = {
+  id: string;
+  mimeType?: string;
+  downloadName: string;
+  contentUrl: string;
+  thumbnailUrl?: string | null;
+};
 
 export function getActiveGenerationJobs(conversation: ConversationDetail): GenerationJob[] {
   return conversation.jobs.filter((job) => job.status === 'QUEUED' || job.status === 'RUNNING');

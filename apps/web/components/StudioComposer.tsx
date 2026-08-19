@@ -2,18 +2,21 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { api, json } from '@/lib/api';
 import GenerationSettings from '@/components/GenerationSettings';
 import MaskCanvas from '@/components/MaskCanvas';
-import type { Asset, GenerationCreated, GenerationMode, StudioModel } from '@/lib/studio-types';
+import PromptHistory from '@/components/PromptHistory';
+import type { Asset, GenerationCreated, GenerationMode, GenerationReuse, ReferenceSelection, StudioModel } from '@/lib/studio-types';
 import { useI18n } from '@/lib/i18n';
 
 type StudioComposerProps = {
   models: StudioModel[];
   conversationId: string;
-  sourceAsset: Asset | null;
-  onSourceAssetChange: (asset: Asset | null) => void;
+  references: ReferenceSelection[];
+  onReferencesChange: (references: ReferenceSelection[]) => void;
+  reusePreset: GenerationReuse | null;
+  onReuseConsumed: () => void;
   onCreated: (result: GenerationCreated) => Promise<void>;
 };
 
-export default function StudioComposer({ models, conversationId, sourceAsset, onSourceAssetChange, onCreated }: StudioComposerProps) {
+export default function StudioComposer({ models, conversationId, references, onReferencesChange, reusePreset, onReuseConsumed, onCreated }: StudioComposerProps) {
   const { t } = useI18n();
   const [prompt, setPrompt] = useState('');
   const [modelId, setModelId] = useState('');
@@ -21,18 +24,48 @@ export default function StudioComposer({ models, conversationId, sourceAsset, on
   const [size, setSize] = useState('');
   const [quality, setQuality] = useState('');
   const [count, setCount] = useState(1);
-  const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [sourceInputKey, setSourceInputKey] = useState(0);
   const [maskFile, setMaskFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const model = useMemo(() => models.find((item) => item.id === modelId), [models, modelId]);
-  const hasSource = Boolean(sourceFile || sourceAsset);
+  const hasSource = references.length > 0;
+  const maxInputImages = model?.maxInputImages ?? 8;
+  const primaryReference = references[0];
 
   useEffect(() => {
     if (model || !models[0]) return;
     chooseModel(models[0]);
   }, [models, model]);
+
+  useEffect(() => {
+    if (!reusePreset) return;
+    const targetModel = reusePreset.modelId ? models.find((item) => item.id === reusePreset.modelId) : undefined;
+    const warnings: string[] = [];
+    setPrompt(reusePreset.prompt);
+    setMode(reusePreset.mode);
+    onReferencesChange(reusePreset.sourceAssets.map((asset) => ({ key: 'reuse-' + asset.id, kind: 'asset', asset })));
+    setMaskFile(null);
+    setSourceInputKey((current) => current + 1);
+
+    if (targetModel) {
+      setModelId(targetModel.id);
+      const nextSize = reusePreset.size && targetModel.allowedSizes.includes(reusePreset.size) ? reusePreset.size : targetModel.defaults.size ?? targetModel.allowedSizes[0];
+      const nextQuality = reusePreset.quality && targetModel.allowedQualities.includes(reusePreset.quality) ? reusePreset.quality : targetModel.defaults.quality ?? targetModel.allowedQualities[0];
+      setSize(nextSize);
+      setQuality(nextQuality);
+      setCount(Math.min(targetModel.maxImages, Math.max(1, reusePreset.count)));
+      if (reusePreset.mode === 'IMAGE_EDIT' && !targetModel.supportsEdit || reusePreset.mode === 'INPAINT' && !targetModel.supportsInpaint) {
+        setMode('TEXT_TO_IMAGE');
+        warnings.push(t('历史任务的编辑模式已不再受当前模型支持，请重新选择模型。'));
+      }
+    } else {
+      warnings.push(t('历史任务使用的模型') + '“' + reusePreset.modelDisplayName + '”' + t('已不可用，请重新选择模型。'));
+    }
+    if (reusePreset.requiresMaskRedraw) warnings.push(t('参考图已恢复；局部重绘需要重新绘制遮罩。'));
+    setError(warnings.join('\n'));
+    onReuseConsumed();
+  }, [models, onReferencesChange, onReuseConsumed, reusePreset, t]);
 
   function chooseModel(item: StudioModel) {
     setModelId(item.id);
@@ -45,10 +78,10 @@ export default function StudioComposer({ models, conversationId, sourceAsset, on
   function resetComposer() {
     setPrompt('');
     setMode('TEXT_TO_IMAGE');
-    setSourceFile(null);
-    onSourceAssetChange(null);
+    onReferencesChange([]);
     setMaskFile(null);
     setSourceInputKey((current) => current + 1);
+    setError('');
     if (model) {
       setSize(model.defaults.size ?? model.allowedSizes[0]);
       setQuality(model.defaults.quality ?? model.allowedQualities[0]);
@@ -67,23 +100,26 @@ export default function StudioComposer({ models, conversationId, sourceAsset, on
     event.preventDefault();
     setError('');
     if (mode === 'TEXT_TO_IMAGE' && hasSource) {
-      setError(`${t('已选参考图')}，${t('请切换到整图编辑或局部重绘')}。`);
+      setError(t('已选参考图') + '，' + t('请切换到整图编辑或局部重绘') + '。');
       return;
     }
     if (mode !== 'TEXT_TO_IMAGE' && !hasSource) {
-      setError(`${t('原图')}：${t('请选择或上传一张原图')}`);
+      setError(t('原图') + '：' + t('请选择或上传一张原图'));
+      return;
+    }
+    if (references.length > maxInputImages) {
+      setError(t('当前参考图数量') + ' ' + references.length + ' ' + t('已超过模型上限') + ' ' + maxInputImages + '。');
       return;
     }
     if (mode === 'INPAINT' && !maskFile) {
-      setError(`${t('请先绘制并使用遮罩')}。`);
+      setError(t('请先绘制并使用遮罩') + '。');
       return;
     }
     setBusy(true);
     try {
-      const [uploadedSource, uploadedMask] = await Promise.all([
-        mode !== 'TEXT_TO_IMAGE' && sourceFile ? upload(sourceFile) : Promise.resolve(undefined),
-        mode === 'INPAINT' && maskFile ? upload(maskFile, 'MASK') : Promise.resolve(undefined),
-      ]);
+      const uploadedReferences = await Promise.all(references.map(async (reference) => reference.kind === 'file' ? upload(reference.file) : reference.asset));
+      const sourceAssetIds = [...new Set(uploadedReferences.map((asset) => asset.id))];
+      const uploadedMask = mode === 'INPAINT' && maskFile ? await upload(maskFile, 'MASK') : undefined;
       const result = await api<GenerationCreated>('/generations', json('POST', {
         conversationId: conversationId || undefined,
         modelId,
@@ -92,7 +128,7 @@ export default function StudioComposer({ models, conversationId, sourceAsset, on
         size,
         quality,
         count,
-        sourceAssetIds: sourceAsset ? [sourceAsset.id] : uploadedSource ? [uploadedSource.id] : [],
+        sourceAssetIds,
         maskAssetId: uploadedMask?.id,
       }));
       resetComposer();
@@ -104,25 +140,44 @@ export default function StudioComposer({ models, conversationId, sourceAsset, on
     }
   }
 
-  function removeSource() {
-    onSourceAssetChange(null);
-    setSourceFile(null);
+  function removeReference(key: string) {
+    onReferencesChange(references.filter((reference) => reference.key !== key));
     setMaskFile(null);
     setError('');
   }
 
-  return <form className={`composer card stack ${conversationId ? 'compact-composer' : ''}`} onSubmit={submit}>
+  function addFiles(files: File[]) {
+    const available = Math.max(0, maxInputImages - references.length);
+    if (!available) {
+      setError(t('已达到该模型的参考图上限') + ' ' + maxInputImages + '。');
+      return;
+    }
+    const accepted = files.slice(0, available);
+    if (accepted.length < files.length) setError(t('仅添加了前') + ' ' + accepted.length + ' ' + t('张参考图，已达到模型上限') + ' ' + maxInputImages + '。');
+    onReferencesChange([...references, ...accepted.map((file, index) => ({ key: 'file-' + Date.now() + '-' + index + '-' + file.name, kind: 'file' as const, file }))]);
+    setMaskFile(null);
+  }
+
+  const maskSource = primaryReference?.kind === 'asset' ? primaryReference.asset.contentUrl : primaryReference?.file;
+
+  return <form className={'composer card stack ' + (conversationId ? 'compact-composer' : '')} onSubmit={submit}>
     <h1>{t('想创作什么？')}</h1>
-    <textarea className="field prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={t('输入图片描述或编辑要求')} required />
-    {hasSource && <div className="source-selection">
-      {sourceAsset ? <img src={sourceAsset.contentUrl} alt={t('已选参考图')} /> : <div className="source-file-icon" aria-hidden="true">▧</div>}
-      <div className="source-selection-copy"><strong>{sourceAsset ? t('已选历史参考图') : sourceFile?.name}</strong><span className="muted">{mode === 'TEXT_TO_IMAGE' ? t('请切换到整图编辑或局部重绘') : t('将作为本次编辑的原图')}</span></div>
-      <button className="icon-button" type="button" onClick={removeSource} aria-label={t('移除参考图')} title={t('移除')}>×</button>
+    <div className="prompt-input-wrap">
+      <textarea className="field prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={t('输入图片描述或编辑要求')} required />
+      <PromptHistory onPick={setPrompt} />
+    </div>
+    {hasSource && <div className="source-selection-list" aria-label={t('参考图列表')}>
+      {references.map((reference, index) => <div className="source-selection" key={reference.key}>
+        {reference.kind === 'asset' ? <img src={reference.asset.thumbnailUrl ?? reference.asset.contentUrl} alt={t('已选参考图')} /> : <div className="source-file-icon" aria-hidden="true">▧</div>}
+        <div className="source-selection-copy"><strong>{index + 1}. {reference.kind === 'asset' ? t('已选历史参考图') : reference.file.name}</strong><span className="muted">{reference.kind === 'asset' ? t('已保存图片') : t('本地图片')}</span></div>
+        <button className="icon-button" type="button" onClick={() => removeReference(reference.key)} aria-label={t('移除参考图')} title={t('移除')}>×</button>
+      </div>)}
+      <p className="muted reference-limit">{t('参考图数量')}：{references.length}/{maxInputImages}</p>
     </div>}
-    {mode !== 'TEXT_TO_IMAGE' && <label className="source-upload">{sourceAsset ? t('更换原图（可选）') : t('原图')}
-      <input key={sourceInputKey} className="field" type="file" accept="image/png,image/jpeg,image/webp" required={!sourceAsset} onChange={(event) => { const file = event.target.files?.[0] ?? null; setSourceFile(file); if (file) onSourceAssetChange(null); setMaskFile(null); setError(''); }} />
+    {mode !== 'TEXT_TO_IMAGE' && <label className="source-upload">{t('添加参考图')}（{t('可多选')}）
+      <input key={sourceInputKey} className="field" type="file" accept="image/png,image/jpeg,image/webp" multiple required={!hasSource} onChange={(event) => { addFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ''; }} />
     </label>}
-    {mode === 'INPAINT' && (sourceFile || sourceAsset) && <MaskCanvas imageSource={sourceFile ?? sourceAsset!.contentUrl} onMask={setMaskFile} />}
+    {mode === 'INPAINT' && maskSource && <MaskCanvas imageSource={maskSource} onMask={setMaskFile} />}
     <div className="composer-controls">
       <select className="field compact-field" value={modelId} onChange={(event) => { const found = models.find((item) => item.id === event.target.value); if (found) chooseModel(found); }} required><option value="">{t('选择模型')}</option>{models.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select>
       <select className="field compact-field" value={mode} onChange={(event) => { setMode(event.target.value as GenerationMode); setError(''); }}><option value="TEXT_TO_IMAGE">{t('文生图')}</option>{model?.supportsEdit && <option value="IMAGE_EDIT">{t('整图编辑')}</option>}{model?.supportsInpaint && <option value="INPAINT">{t('局部重绘')}</option>}</select>

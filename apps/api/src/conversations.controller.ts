@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { generationJobSelect, serializeGenerationJob } from './generation-response';
 import { cursorWhere, decodeCursor, encodeCursor, pageLimit } from './pagination';
 import { ACTIVE_JOB_STATUSES } from './domain-constants';
+import { serializeAssetLinks } from './asset-response';
 
 const titleSchema = z.object({ title: z.string().trim().min(1).max(80) }).strict();
 
@@ -42,6 +43,26 @@ export class ConversationsController {
     const body = raw === undefined || (typeof raw === 'object' && raw !== null && !Object.keys(raw).length) ? { title: '新创作' } : parseBody(titleSchema, raw);
     const title = body.title;
     return this.prisma.conversation.create({ data: { userId: user.id, title } });
+  }
+
+  @Get(':id/output-assets')
+  async outputAssets(@CurrentUser() user: AuthUser, @Param('id', new ParseUUIDPipe({ version: '4' })) id: string) {
+    const conversation = await this.prisma.conversation.findFirst({ where: { id, userId: user.id }, select: { id: true } });
+    if (!conversation) throw new NotFoundException();
+    const assets = await this.prisma.asset.findMany({
+      where: { userId: user.id, role: 'OUTPUT', deletedAt: null, job: { conversationId: id, userId: user.id } },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { id: true, mimeType: true, createdAt: true, deletedAt: true },
+    });
+    return {
+      items: assets.map((asset, index) => ({
+        id: asset.id,
+        mimeType: asset.mimeType,
+        downloadName: `session-${String(index + 1).padStart(4, '0')}${extensionForMime(asset.mimeType)}`,
+        ...serializeAssetLinks(asset),
+      })),
+      total: assets.length,
+    };
   }
 
   @Get(':id')
@@ -105,4 +126,10 @@ export class ConversationsController {
     if (bytes) await this.quota.releaseStorage(user.id, bytes);
     return { ok: true, deletedAssetIds };
   }
+}
+
+function extensionForMime(mimeType: string) {
+  if (mimeType === 'image/jpeg') return '.jpg';
+  if (mimeType === 'image/webp') return '.webp';
+  return '.png';
 }

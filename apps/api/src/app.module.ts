@@ -28,12 +28,13 @@ import { AuthContextService } from './auth-context.service';
 import { GenerationEventsService } from './generation-events.service';
 import { GenerationLifecycleService } from './generation-lifecycle.service';
 import { AssetLifecycleService } from './asset-lifecycle.service';
+import { PromptsController } from './prompts.controller';
 
 const sharedProviders = [PrismaService, RedisService, RateLimitService, QuotaService, CryptoService, MfaCryptoService, MfaService, StorageService, AssetLifecycleService, SafeHttpService, AuthContextService, GenerationEventsService, GenerationLifecycleService, AuthService];
 
 @Module({
   imports: [BullModule.forRoot({ connection: parseRedisUrl() }), BullModule.registerQueue({ name: 'image-generation' })],
-  controllers: [HealthController, AuthController, AdminController, ProvidersController, ModelsController, AssetsController, ConversationsController, GenerationsController],
+  controllers: [HealthController, AuthController, AdminController, ProvidersController, ModelsController, AssetsController, ConversationsController, GenerationsController, PromptsController],
   providers: [...sharedProviders, GenerationProcessor, UploadAdmissionInterceptor, { provide: APP_GUARD, useClass: SessionGuard }],
 })
 export class AppModule {}

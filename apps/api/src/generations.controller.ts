@@ -15,6 +15,7 @@ import { AssetLifecycleService } from './asset-lifecycle.service';
 import { GENERATION_QUEUE_OPTIONS } from './domain-constants';
 import { GenerationEventsService } from './generation-events.service';
 import { GenerationLifecycleService } from './generation-lifecycle.service';
+import { serializeAssetLinks } from './asset-response';
 
 const generationSchema = z.object({
   prompt: safeText(8000), modelId: uuidSchema, mode: z.enum(['TEXT_TO_IMAGE', 'IMAGE_EDIT', 'INPAINT']).optional(),
@@ -74,7 +75,10 @@ export class GenerationsController {
     const quality = body.quality ?? defaults.quality ?? allowedQualities[0];
     const count = Math.min(model.maxImages, Math.max(1, Number(body.count) || 1));
     if (!allowedSizes.includes(size) || !allowedQualities.includes(quality)) throw new BadRequestException('尺寸或质量不受该模型支持');
-    const sourceIds = Array.isArray(body.sourceAssetIds) ? body.sourceAssetIds.slice(0, Math.min(8, model.maxInputImages)) : [];
+    const sourceIds = Array.isArray(body.sourceAssetIds) ? [...new Set(body.sourceAssetIds)] : [];
+    if (sourceIds.length > 8) throw new BadRequestException('参考图最多支持 8 张');
+    if (sourceIds.length > model.maxInputImages) throw new BadRequestException(`该模型最多支持 ${model.maxInputImages} 张参考图`);
+    if (mode === 'TEXT_TO_IMAGE' && sourceIds.length) throw new BadRequestException('文生图不支持参考图');
     const assetIds = [...sourceIds, ...(body.maskAssetId ? [body.maskAssetId] : [])];
     const assets = assetIds.length ? await this.prisma.asset.findMany({ where: { id: { in: assetIds }, userId: user.id, deletedAt: null } }) : [];
     if (assets.length !== new Set(assetIds).size) throw new BadRequestException('引用图片不存在');
@@ -90,6 +94,12 @@ export class GenerationsController {
       const result = await this.prisma.$transaction(async (transaction) => {
         await this.quota.reserveJobInTransaction(transaction, user.id);
         const targetConversationId = conversationId ?? (await transaction.conversation.create({ data: { userId: user.id, title: prompt.slice(0, 30) } })).id;
+        const promptUsedAt = new Date();
+        await transaction.promptEntry.upsert({
+          where: { userId_prompt: { userId: user.id, prompt } },
+          create: { userId: user.id, prompt, usageCount: 1, lastUsedAt: promptUsedAt },
+          update: { usageCount: { increment: 1 }, lastUsedAt: promptUsedAt },
+        });
         const created = await transaction.generationJob.create({ data: {
           userId: user.id, conversationId: targetConversationId, modelId: model.id, mode, prompt, parameters,
           modelSnapshot: { displayName: model.displayName, upstreamModelId: model.upstreamModelId, providerName: model.provider.name },
@@ -110,6 +120,53 @@ export class GenerationsController {
       throw error;
     }
     return { id: job.id, conversationId, status: job.status };
+  }
+
+  @Get(':id/reuse')
+  async reuse(@CurrentUser() user: AuthUser, @Param('id', new ParseUUIDPipe({ version: '4' })) id: string) {
+    const job = await this.prisma.generationJob.findFirst({
+      where: { id, userId: user.id },
+      select: { modelId: true, mode: true, prompt: true, parameters: true, modelSnapshot: true },
+    });
+    if (!job) throw new NotFoundException();
+    const parameters = readGenerationParameters(job.parameters);
+    const sourceAssetIds = [...new Set(parameters.sourceAssetIds ?? [])];
+    const sourceRows = sourceAssetIds.length ? await this.prisma.asset.findMany({
+      where: { id: { in: sourceAssetIds }, userId: user.id, deletedAt: null, role: { in: ['UPLOAD', 'OUTPUT'] } },
+      select: {
+        id: true, role: true, width: true, height: true, mimeType: true, sizeBytes: true, note: true, deletedAt: true,
+        thumbnail: { select: { id: true, deletedAt: true } },
+        job: { select: { prompt: true } },
+      },
+    }) : [];
+    if (sourceRows.length !== sourceAssetIds.length) throw new BadRequestException('历史参考图已不存在，无法恢复');
+    const sourceById = new Map(sourceRows.map((asset) => [asset.id, asset]));
+    const snapshot = job.modelSnapshot && typeof job.modelSnapshot === 'object' && !Array.isArray(job.modelSnapshot) ? job.modelSnapshot as Record<string, unknown> : {};
+    const modelDisplayName = typeof snapshot.displayName === 'string' && snapshot.displayName.trim() ? snapshot.displayName : 'Unknown model';
+    return {
+      prompt: job.prompt,
+      mode: job.mode,
+      modelId: job.modelId,
+      modelDisplayName,
+      size: parameters.size ?? null,
+      quality: parameters.quality ?? null,
+      count: Math.max(1, Number(parameters.count) || 1),
+      sourceAssets: sourceAssetIds.map((assetId) => {
+        const asset = sourceById.get(assetId)!;
+        return {
+          id: asset.id,
+          role: asset.role,
+          width: asset.width,
+          height: asset.height,
+          mimeType: asset.mimeType,
+          sizeBytes: asset.sizeBytes.toString(),
+          note: asset.note ?? null,
+          generationPrompt: asset.job?.prompt ?? null,
+          ...serializeAssetLinks(asset),
+        };
+      }),
+      requiresMaskRedraw: job.mode === 'INPAINT',
+    };
   }
 
   @Post(':id/retry')
