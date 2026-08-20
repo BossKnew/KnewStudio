@@ -4,24 +4,31 @@ import { api, json } from '@/lib/api';
 import { formatStorageBytes } from '@/lib/format-bytes';
 import SecuritySettings from '@/components/SecuritySettings';
 import PromptPolishSettings from '@/components/PromptPolishSettings';
+import OptionLabelsSettings from '@/components/OptionLabelsSettings';
 import { passwordRequirement } from '@/lib/password-policy';
 import type { CursorPage, SecurityUser } from '@/lib/studio-types';
 import { LanguageSwitcher, useI18n } from '@/lib/i18n';
 
-type AdminView = 'users' | 'groups' | 'providers' | 'models' | 'prompt-polish' | 'security';
+type AdminView = 'users' | 'groups' | 'usage' | 'providers' | 'models' | 'labels' | 'prompt-polish' | 'security';
 type Provider = { id: string; name: string; baseUrl: string; timeoutSeconds: number; enabled: boolean; testCooldownUntil: string | null; lastTestOk: boolean | null };
-type UserGroup = { id: string; name: string; description: string | null; _count: { users: number; models: number } };
+type UserGroup = { id: string; name: string; description: string | null; quotaWindow: string | null; quotaImages: number | null; _count: { users: number; models: number; assetShares?: number } };
 type AdminModel = { id: string; providerId: string; displayName: string; upstreamModelId: string; allowedSizes: string[]; allowedQualities: string[]; supportsEdit: boolean; supportsInpaint: boolean; maxImages: number; maxInputImages: number; enabled: boolean; provider: { id: string; name: string }; allowedGroups: Array<{ groupId: string; group: { id: string; name: string } }> };
 type ProviderForm = { name: string; baseUrl: string; apiKey: string; timeoutSeconds: number };
 type ModelForm = { providerId: string; displayName: string; upstreamModelId: string; allowedSizes: string; allowedQualities: string; supportsEdit: boolean; supportsInpaint: boolean; maxImages: number; maxInputImages: number; allowedGroupIds: string[] };
-type GroupForm = { name: string; description: string };
+type GroupForm = { name: string; description: string; quotaWindow: string; quotaImages: string };
+type UsageRow = { userId: string; username: string; displayName: string; imageCount: number; events: number };
 type Notice = { kind: 'success' | 'error'; message: string };
 type AdminUser = { id: string; username: string; displayName: string; role: 'USER' | 'ADMIN'; status: string; groups: Array<{ id: string; name: string }>; mfaEnabled: boolean; mfaRequired: boolean; _count: { jobs: number; conversations: number; assets: number }; storageBytes: string };
 type AdminSettings = { registrationEnabled: boolean; userSessionDuration?: string };
 
 const emptyProviderForm = (): ProviderForm => ({ name: '', baseUrl: '', apiKey: '', timeoutSeconds: 180 });
 const emptyModelForm = (): ModelForm => ({ providerId: '', displayName: '', upstreamModelId: '', allowedSizes: '', allowedQualities: 'auto,low,medium,high', supportsEdit: false, supportsInpaint: false, maxImages: 1, maxInputImages: 1, allowedGroupIds: [] });
-const emptyGroupForm = (): GroupForm => ({ name: '', description: '' });
+const emptyGroupForm = (): GroupForm => ({ name: '', description: '', quotaWindow: '', quotaImages: '' });
+
+function utcDay(offset = 0) {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + offset)).toISOString().slice(0, 10);
+}
 
 export default function AdminPage() {
   const router = useRouter();
@@ -46,6 +53,10 @@ export default function AdminPage() {
   const [editingGroupId, setEditingGroupId] = useState('');
   const [authorized, setAuthorized] = useState(false);
   const [clockNow, setClockNow] = useState(Date.now());
+  const [usageFrom, setUsageFrom] = useState(() => utcDay(-6));
+  const [usageTo, setUsageTo] = useState(() => utcDay(0));
+  const [usageRows, setUsageRows] = useState<UsageRow[]>([]);
+  const [usageBusy, setUsageBusy] = useState(false);
 
   const refreshUsers = useCallback(async () => {
     try {
@@ -84,6 +95,16 @@ export default function AdminPage() {
     } catch (caught) { setError((caught as Error).message); }
   }, []);
 
+  const refreshUsage = useCallback(async () => {
+    setUsageBusy(true);
+    try {
+      const result = await api<{ items: UsageRow[] }>(`/admin/usage?from=${encodeURIComponent(usageFrom)}&to=${encodeURIComponent(usageTo)}`);
+      setUsageRows(result.items);
+      setError('');
+    } catch (caught) { setError((caught as Error).message); }
+    finally { setUsageBusy(false); }
+  }, [usageFrom, usageTo]);
+
   useEffect(() => {
     api<{ user: SecurityUser }>('/auth/me').then((result) => {
       if (result.user.role !== 'ADMIN') { router.replace('/'); return; }
@@ -95,9 +116,10 @@ export default function AdminPage() {
     if (!authorized) return;
     if (view === 'users') void refreshUsers();
     if (view === 'groups') void refreshGroups();
+    if (view === 'usage') void refreshUsage();
     if (view === 'providers') void refreshProviders();
     if (view === 'models') void refreshModels();
-  }, [authorized, refreshGroups, refreshModels, refreshProviders, refreshUsers, view]);
+  }, [authorized, refreshGroups, refreshModels, refreshProviders, refreshUsage, refreshUsers, view]);
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(null), 3000);
@@ -221,13 +243,13 @@ export default function AdminPage() {
   }
 
   function beginGroupEdit(group: UserGroup) {
-    setEditingGroupId(group.id); setGroupForm({ name: group.name, description: group.description ?? '' }); setError('');
+    setEditingGroupId(group.id); setGroupForm({ name: group.name, description: group.description ?? '', quotaWindow: group.quotaWindow ?? '', quotaImages: group.quotaImages != null ? String(group.quotaImages) : '' }); setError('');
   }
 
   async function saveGroup(event: FormEvent) {
     event.preventDefault(); setError('');
     try {
-      const payload = { name: groupForm.name, description: groupForm.description || null };
+      const payload = { name: groupForm.name, description: groupForm.description || null, quotaWindow: groupForm.quotaWindow.trim() || null, quotaImages: groupForm.quotaImages.trim() ? Number(groupForm.quotaImages) : null };
       if (editingGroupId) await api(`/admin/user-groups/${editingGroupId}`, json('PATCH', payload));
       else await api('/admin/user-groups', json('POST', payload));
       const updating = Boolean(editingGroupId); cancelGroupEdit(); await refreshGroups();
@@ -317,8 +339,10 @@ export default function AdminPage() {
       <nav className="sidebar-nav" aria-label={t('后台管理导航')}>
         <AdminNavButton active={view === 'users'} onClick={() => setView('users')} icon="♙">{t('用户管理')}</AdminNavButton>
         <AdminNavButton active={view === 'groups'} onClick={() => setView('groups')} icon="◎">{t('用户组')}</AdminNavButton>
+        <AdminNavButton active={view === 'usage'} onClick={() => setView('usage')} icon="▣">{t('用量')}</AdminNavButton>
         <AdminNavButton active={view === 'providers'} onClick={() => setView('providers')} icon="◇">{t('添加供应商')}</AdminNavButton>
         <AdminNavButton active={view === 'models'} onClick={() => setView('models')} icon="▦">{t('添加模型')}</AdminNavButton>
+        <AdminNavButton active={view === 'labels'} onClick={() => setView('labels')} icon="☰">{t('显示文案')}</AdminNavButton>
         <AdminNavButton active={view === 'prompt-polish'} onClick={() => setView('prompt-polish')} icon="✦">{t('提示词润色')}</AdminNavButton>
         <AdminNavButton active={view === 'security'} onClick={() => setView('security')} icon="◆">{t('安全')}</AdminNavButton>
       </nav>
@@ -326,7 +350,7 @@ export default function AdminPage() {
     </aside>
 
     <main className="main admin-main">
-      <header className="topbar admin-topbar"><div><h1>{view === 'users' ? t('用户管理') : view === 'groups' ? t('用户组') : view === 'providers' ? t('添加供应商') : view === 'models' ? t('添加模型') : view === 'prompt-polish' ? t('提示词润色') : t('安全')}</h1><p className="muted">{view === 'security' ? t('管理你的管理员账号安全选项。') : view === 'prompt-polish' ? t('配置用于文生图提示词润色的大语言模型。') : t('管理 KnewStudio 的访问权限与图片生成能力。')}</p></div><LanguageSwitcher /></header>
+      <header className="topbar admin-topbar"><div><h1>{view === 'users' ? t('用户管理') : view === 'groups' ? t('用户组') : view === 'usage' ? t('用量') : view === 'providers' ? t('添加供应商') : view === 'models' ? t('添加模型') : view === 'labels' ? t('显示文案') : view === 'prompt-polish' ? t('提示词润色') : t('安全')}</h1><p className="muted">{view === 'security' ? t('管理你的管理员账号安全选项。') : view === 'prompt-polish' ? t('配置用于文生图提示词润色的大语言模型。') : view === 'usage' ? t('查看各用户在选定 UTC 日期范围内消耗的生成张数。重试会计入。') : view === 'labels' ? t('设置尺寸和质量在工作台中文/英文界面的显示名称。') : t('管理 KnewStudio 的访问权限与图片生成能力。')}</p></div><LanguageSwitcher /></header>
       {error && <p className="error admin-error">{error}</p>}
 
       {view === 'users' && <section className="admin-section stack">
@@ -347,10 +371,28 @@ export default function AdminPage() {
         <section className={`card stack admin-panel ${editingGroupId ? 'editing-panel' : ''}`}><h2>{editingGroupId ? t('编辑用户组') : t('新建用户组')}</h2><form className="stack" onSubmit={saveGroup}>
           <input className="field" required maxLength={64} placeholder={t('用户组名称')} value={groupForm.name} onChange={(event) => setGroupForm({ ...groupForm, name: event.target.value })} />
           <textarea className="field" maxLength={300} placeholder={t('说明（可选）')} value={groupForm.description} onChange={(event) => setGroupForm({ ...groupForm, description: event.target.value })} />
+          <label>{t('生成窗口')}<input className="field" value={groupForm.quotaWindow} maxLength={4} placeholder={t('例如 5h，留空表示不限额')} onChange={(event) => setGroupForm({ ...groupForm, quotaWindow: event.target.value })} /></label>
+          <label>{t('窗口内每人张数')}<input className="field" value={groupForm.quotaImages} inputMode="numeric" placeholder={t('例如 5，留空表示不限额')} onChange={(event) => setGroupForm({ ...groupForm, quotaImages: event.target.value })} /></label>
+          <p className="muted">{t('滑动窗口按张计数，组内每人独立额度。重试也计张。窗口与张数必须同时填写或同时留空。')}</p>
           <div className="form-actions">{editingGroupId && <button className="button" type="button" onClick={cancelGroupEdit}>{t('取消')}</button>}<button className="button primary">{editingGroupId ? t('保存修改') : t('创建用户组')}</button></div>
         </form></section>
-        <section className="card stack admin-panel"><h2>{t('已有用户组')}</h2>{groups.length === 0 && <p className="muted">{t('还没有用户组。')}</p>}{groups.map((group) => <div className="admin-list-item" key={group.id}><div><strong>{group.name}</strong><p className="muted">{group.description || t('无说明')} · {group._count.users}{t('位用户')} · {group._count.models}{t('个模型')}</p></div><div className="admin-actions"><button className="button" onClick={() => beginGroupEdit(group)}>{t('编辑')}</button><button className="button danger" onClick={() => void deleteGroup(group)}>{t('删除')}</button></div></div>)}</section>
+        <section className="card stack admin-panel"><h2>{t('已有用户组')}</h2>{groups.length === 0 && <p className="muted">{t('还没有用户组。')}</p>}{groups.map((group) => <div className="admin-list-item" key={group.id}><div><strong>{group.name}</strong><p className="muted">{group.description || t('无说明')} · {group._count.users}{t('位用户')} · {group._count.models}{t('个模型')} · {group._count.assetShares ?? 0}{t('条分享')} · {group.quotaWindow && group.quotaImages != null ? `${group.quotaImages}${t('张')} / ${group.quotaWindow}` : t('不限额')}</p></div><div className="admin-actions"><button className="button" onClick={() => beginGroupEdit(group)}>{t('编辑')}</button><button className="button danger" onClick={() => void deleteGroup(group)}>{t('删除')}</button></div></div>)}</section>
         <section className="card stack admin-panel admin-span-full"><h2>{t('分配用户')}</h2><p className="muted">{t('用户可以同时属于多个组。修改后立即生效；管理员默认拥有全部模型权限。')}</p>{users.map((user) => <div className="group-assignment-row" key={user.id}><div><strong>{user.displayName || user.username}</strong><p className="muted">@{user.username}</p></div><div className="permission-options">{user.role === 'ADMIN' ? <span className="muted">{t('管理员无需分组')}</span> : groups.length ? groups.map((group) => <label key={group.id}><input type="checkbox" checked={user.groups.some(({ id }) => id === group.id)} onChange={(event) => void updateUserGroups(user, group.id, event.target.checked)} /> {group.name}</label>) : <span className="muted">{t('请先创建用户组')}</span>}</div></div>)}{userCursor && <button className="button" onClick={() => void loadMoreUsers()}>{t('加载更多用户')}</button>}</section>
+      </section>}
+
+      {view === 'usage' && <section className="admin-section stack">
+        <form className="card registration-card session-duration-setting" onSubmit={(event) => { event.preventDefault(); void refreshUsage(); }}>
+          <div><strong>{t('UTC 日期范围')}</strong><p className="muted">{t('结束日期包含当天。账本从启用组配额后开始记录。')}</p></div>
+          <div className="admin-actions">
+            <input className="field compact-field" type="date" required value={usageFrom} onChange={(event) => setUsageFrom(event.target.value)} />
+            <input className="field compact-field" type="date" required value={usageTo} onChange={(event) => setUsageTo(event.target.value)} />
+            <button className="button primary" disabled={usageBusy}>{usageBusy ? t('加载中…') : t('查询')}</button>
+          </div>
+        </form>
+        <section className="card admin-panel"><h2>{t('按用户')}</h2>
+          <div className="table-scroll"><table><thead><tr><th>{t('用户名')}</th><th>{t('出图张数')}</th><th>{t('扣减次数')}</th></tr></thead>
+          <tbody>{usageRows.length ? usageRows.map((row) => <tr key={row.userId}><td>{row.displayName || row.username}<br /><span className="muted">@{row.username}</span></td><td>{row.imageCount}</td><td>{row.events}</td></tr>) : <tr><td colSpan={3} className="muted">{t('这段时间没有生成记录。')}</td></tr>}</tbody></table></div>
+        </section>
       </section>}
 
       {view === 'providers' && <section className="admin-section admin-two-column">
@@ -382,6 +424,7 @@ export default function AdminPage() {
           <button className="button" onClick={() => beginModelEdit(item)}>{t('编辑')}</button><button className="button" onClick={() => void toggleModel(item)}>{item.enabled ? t('停用') : t('启用')}</button><button className="button danger" onClick={() => void deleteModel(item)}>{t('删除')}</button>
         </div></div>)}</section>
       </section>}
+      {view === 'labels' && <OptionLabelsSettings onNotice={notify} onError={setError} />}
       {view === 'prompt-polish' && <PromptPolishSettings onNotice={notify} onError={setError} />}
       {view === 'security' && currentUser && <SecuritySettings user={currentUser} />}
     </main>

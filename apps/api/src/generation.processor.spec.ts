@@ -184,13 +184,14 @@ describe('GenerationProcessor mask lifecycle', () => {
     const sourceStored2 = await stageAndSave(storage, 'user-1', input, 'image/png');
     const maskStored = await stageAndSave(storage, 'user-1', input, 'image/png');
     const job = {
-      id: 'job-1', userId: 'user-1', status: 'QUEUED', mode: 'INPAINT', user: { status: 'ACTIVE' },
+      id: 'job-1', userId: 'user-1', status: 'QUEUED', mode: 'INPAINT', user: { status: 'ACTIVE', role: 'USER' },
       model: { upstreamModelId: 'image-model', provider: { baseUrl: 'https://api.example.com/v1', encryptedApiKey: 'encrypted', encryptedHeaders: null, timeoutSeconds: 30 } },
       parameters: { sourceAssetIds: ['source-1', 'source-2'], maskAssetId: 'mask-1', size: '1024x1024', count: 1 }, prompt: 'replace the sky',
     };
     const prisma: any = {
       generationJob: { findUnique: jest.fn().mockResolvedValueOnce(job).mockResolvedValueOnce({ status: 'RUNNING' }), update: jest.fn().mockResolvedValue({}), updateMany: jest.fn() },
       user: { findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }) },
+      userGroupMembership: { findMany: jest.fn().mockResolvedValue([]) },
       asset: {
           findFirst: jest.fn()
             .mockResolvedValueOnce({ id: 'source-1', objectKey: sourceStored.objectKey, mimeType: 'image/png', originalName: 'source.png' })
@@ -231,7 +232,7 @@ describe('GenerationProcessor mask lifecycle', () => {
   it('marks a non-retryable provider failure once and raises BullMQ UnrecoverableError', async () => {
     const storage = new StorageService();
     const job = {
-      id: 'job-4xx', userId: 'user-1', status: 'QUEUED', mode: 'TEXT_TO_IMAGE', user: { status: 'ACTIVE' },
+      id: 'job-4xx', userId: 'user-1', status: 'QUEUED', mode: 'TEXT_TO_IMAGE', user: { status: 'ACTIVE', role: 'USER' },
       model: { upstreamModelId: 'image-model', provider: { baseUrl: 'https://api.example.com/v1', encryptedApiKey: 'encrypted', encryptedHeaders: null, timeoutSeconds: 30 } },
       parameters: { size: '1024x1024', quality: 'auto', count: 1 }, prompt: 'test prompt',
     };
@@ -264,13 +265,14 @@ describe('GenerationProcessor mask lifecycle', () => {
     const input = await sharp({ create: { width: 16, height: 16, channels: 4, background: '#fff' } }).png().toBuffer();
     const sourceStored = await stageAndSave(storage, 'user-1', input, 'image/png');
     const job = {
-      id: 'job-single', userId: 'user-1', status: 'QUEUED', mode: 'IMAGE_EDIT', user: { status: 'ACTIVE' },
+      id: 'job-single', userId: 'user-1', status: 'QUEUED', mode: 'IMAGE_EDIT', user: { status: 'ACTIVE', role: 'USER' },
       model: { upstreamModelId: 'image-model', provider: { baseUrl: 'https://api.example.com/v1', encryptedApiKey: 'encrypted', encryptedHeaders: null, timeoutSeconds: 30 } },
       parameters: { sourceAssetIds: ['source-1'], size: '1024x1024', count: 1 }, prompt: 'restyle',
     };
     const prisma: any = {
       generationJob: { findUnique: jest.fn().mockResolvedValueOnce(job).mockResolvedValueOnce({ status: 'RUNNING' }), update: jest.fn().mockResolvedValue({}), updateMany: jest.fn() },
       user: { findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE' }) },
+      userGroupMembership: { findMany: jest.fn().mockResolvedValue([]) },
       asset: { findFirst: jest.fn().mockResolvedValue({ id: 'source-1', objectKey: sourceStored.objectKey, mimeType: 'image/png', originalName: 'source.png' }) },
     };
     const http: any = {
@@ -295,7 +297,7 @@ describe('GenerationProcessor mask lifecycle', () => {
     const storage = new StorageService();
     const input = await sharp({ create: { width: 16, height: 16, channels: 4, background: '#0f0' } }).png().toBuffer();
     const job = {
-      id: 'job-chat', userId: 'user-1', status: 'QUEUED', mode: 'TEXT_TO_IMAGE', user: { status: 'ACTIVE' },
+      id: 'job-chat', userId: 'user-1', status: 'QUEUED', mode: 'TEXT_TO_IMAGE', user: { status: 'ACTIVE', role: 'USER' },
       model: { upstreamModelId: 'gpt-4o-image', provider: { baseUrl: 'https://api.example.com/v1', encryptedApiKey: 'encrypted', encryptedHeaders: null, timeoutSeconds: 30 } },
       parameters: { size: '1024x1024', quality: 'auto', count: 1 }, prompt: 'a green square',
     };

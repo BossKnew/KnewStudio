@@ -99,7 +99,7 @@ export class ConversationsController {
     const referencedSourceIds = [...new Set(conversation.jobs.flatMap((job) => sourceAssetIds(job.parameters)))];
     const uploadedSources = referencedSourceIds.length ? await this.prisma.asset.findMany({
       where: { id: { in: referencedSourceIds }, userId: user.id, role: 'UPLOAD' },
-      select: { id: true, objectKey: true, sizeBytes: true, deletedAt: true, role: true, thumbnail: { select: { id: true, objectKey: true, sizeBytes: true, deletedAt: true, role: true } } },
+      select: { id: true, objectKey: true, sizeBytes: true, deletedAt: true, role: true, shares: { select: { id: true }, take: 1 }, thumbnail: { select: { id: true, objectKey: true, sizeBytes: true, deletedAt: true, role: true } } },
     }) : [];
     const sharedJobs = uploadedSources.length ? await this.prisma.generationJob.findMany({
       where: {
@@ -110,7 +110,7 @@ export class ConversationsController {
       select: { parameters: true },
     }) : [];
     const sharedSourceIds = new Set(sharedJobs.flatMap((job) => sourceAssetIds(job.parameters)));
-    const exclusiveUploads = uploadedSources.filter((asset) => !sharedSourceIds.has(asset.id));
+    const exclusiveUploads = uploadedSources.filter((asset) => !sharedSourceIds.has(asset.id) && !asset.shares?.length);
     const assets = [
       ...conversation.jobs.flatMap((job) => job.assets),
       ...exclusiveUploads.flatMap(({ thumbnail, ...asset }) => [asset, ...(thumbnail ? [thumbnail] : [])]),

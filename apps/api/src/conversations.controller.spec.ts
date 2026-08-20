@@ -90,4 +90,29 @@ describe('ConversationsController asset cleanup', () => {
     expect(transaction.asset.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ['exclusive-upload', 'exclusive-thumb'] } } });
     expect(quota.releaseStorage).toHaveBeenCalledWith('user-1', 20n);
   });
+
+  it('keeps an upload that is shared with a group even if no other conversation uses it', async () => {
+    const transaction: any = {
+      asset: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      conversation: { delete: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma: any = {
+      conversation: { findFirst: jest.fn().mockResolvedValue({
+        id: 'conversation-1',
+        jobs: [{ status: 'FAILED', parameters: { sourceAssetIds: ['shared-upload'] }, assets: [] }],
+      }) },
+      asset: { findMany: jest.fn().mockResolvedValue([
+        { id: 'shared-upload', objectKey: 'user-1/shared.png', sizeBytes: 30n, deletedAt: null, role: 'UPLOAD', shares: [{ id: 'share-1' }], thumbnail: null },
+      ]) },
+      generationJob: { findMany: jest.fn().mockResolvedValue([]) },
+      $transaction: jest.fn((callback: any) => callback(transaction)),
+    };
+    const storage: any = { deleteMany: jest.fn().mockResolvedValue(undefined) };
+    const quota: any = { releaseStorage: jest.fn().mockResolvedValue(undefined) };
+    const controller = new ConversationsController(prisma, storage, quota);
+
+    await expect(controller.remove({ id: 'user-1' } as any, 'conversation-1')).resolves.toEqual({ ok: true, deletedAssetIds: [] });
+    expect(storage.deleteMany).toHaveBeenCalledWith([]);
+    expect(quota.releaseStorage).not.toHaveBeenCalled();
+  });
 });

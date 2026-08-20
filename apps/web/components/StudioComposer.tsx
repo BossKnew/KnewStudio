@@ -4,10 +4,12 @@ import GenerationSettings from '@/components/GenerationSettings';
 import MaskCanvas from '@/components/MaskCanvas';
 import PromptHistory from '@/components/PromptHistory';
 import type { Asset, GenerationCreated, GenerationMode, GenerationReuse, ReferenceSelection, StudioModel } from '@/lib/studio-types';
+import type { OptionLabelMap } from '@/lib/option-labels';
 import { useI18n } from '@/lib/i18n';
 
 type StudioComposerProps = {
   models: StudioModel[];
+  optionLabels?: OptionLabelMap;
   conversationId: string;
   references: ReferenceSelection[];
   onReferencesChange: (references: ReferenceSelection[]) => void;
@@ -16,7 +18,7 @@ type StudioComposerProps = {
   onCreated: (result: GenerationCreated) => Promise<void>;
 };
 
-export default function StudioComposer({ models, conversationId, references, onReferencesChange, reusePreset, onReuseConsumed, onCreated }: StudioComposerProps) {
+export default function StudioComposer({ models, optionLabels = {}, conversationId, references, onReferencesChange, reusePreset, onReuseConsumed, onCreated }: StudioComposerProps) {
   const { t } = useI18n();
   const [prompt, setPrompt] = useState('');
   const [modelId, setModelId] = useState('');
@@ -98,6 +100,7 @@ export default function StudioComposer({ models, conversationId, references, onR
       setError(t('提示词不能为空'));
       return;
     }
+    if (!confirm(t('确定润色当前提示词？将调用润色模型改写内容。'))) return;
     setPolishBusy(true);
     setError('');
     try {
@@ -117,6 +120,7 @@ export default function StudioComposer({ models, conversationId, references, onR
       setPolishPreview(null);
       return;
     }
+    if (!confirm(t('确定用润色结果替换当前提示词？'))) return;
     setPrompt(polishPreview.polishedPrompt);
     setPolishPreview(null);
     setError('');
@@ -210,7 +214,7 @@ export default function StudioComposer({ models, conversationId, references, onR
     {hasSource && <div className="source-selection-list" aria-label={t('参考图列表')}>
       {references.map((reference, index) => <div className="source-selection" key={reference.key}>
         {reference.kind === 'asset' ? <img src={reference.asset.thumbnailUrl ?? reference.asset.contentUrl} alt={t('已选参考图')} /> : <div className="source-file-icon" aria-hidden="true">▧</div>}
-        <div className="source-selection-copy"><strong>{index + 1}. {reference.kind === 'asset' ? t('已选历史参考图') : reference.file.name}</strong><span className="muted">{reference.kind === 'asset' ? t('已保存图片') : t('本地图片')}</span></div>
+        <div className="source-selection-copy"><strong>{index + 1}. {reference.kind === 'asset' ? reference.asset.visibility === 'shared' ? t('组内参考图') : t('已选历史参考图') : reference.file.name}</strong><span className="muted">{reference.kind === 'asset' ? reference.asset.visibility === 'shared' ? t('组内素材') : t('已保存图片') : t('本地图片')}</span></div>
         <button className="icon-button" type="button" onClick={() => removeReference(reference.key)} aria-label={t('移除参考图')} title={t('移除')}>×</button>
       </div>)}
       <p className="muted reference-limit">{t('参考图数量')}：{references.length}/{maxInputImages}</p>
@@ -225,6 +229,7 @@ export default function StudioComposer({ models, conversationId, references, onR
       <GenerationSettings
         sizes={model?.allowedSizes ?? []}
         qualities={model?.allowedQualities ?? []}
+        optionLabels={optionLabels}
         maxImages={model?.maxImages ?? 1}
         size={size}
         quality={quality}

@@ -11,6 +11,23 @@ export type StudioUser = {
 };
 
 export type SecurityUser = Pick<StudioUser, 'role' | 'mfaEnabled' | 'mfaRequired'>;
+
+export type UsagePolicy = {
+  groupId: string;
+  groupName: string;
+  window: string;
+  images: number;
+  used: number;
+  remaining: number;
+  resetAt: string | null;
+  retryAfterSeconds: number;
+};
+
+export type UsageSnapshot = {
+  storageBytes: string;
+  storageQuotaBytes: string;
+  policies: UsagePolicy[];
+};
 export type CursorPage<T> = { items: T[]; nextCursor: string | null; total?: number };
 
 export type GenerationMode = 'TEXT_TO_IMAGE' | 'IMAGE_EDIT' | 'INPAINT';
@@ -31,6 +48,8 @@ export type StudioModel = {
 
 export type ConversationSummary = { id: string; title: string; _count: { jobs: number } };
 
+export type StudioGroup = { id: string; name: string };
+
 export type Asset = {
   id: string;
   role: 'UPLOAD' | 'OUTPUT' | 'MASK';
@@ -43,6 +62,13 @@ export type Asset = {
   sizeBytes?: string;
   note: string | null;
   generationPrompt?: string | null;
+  visibility?: 'owned' | 'shared';
+  sharedGroupIds?: string[];
+  shareId?: string;
+  sharedAt?: string;
+  group?: StudioGroup;
+  sharedBy?: { displayName: string };
+  canUnshare?: boolean;
 };
 
 export type JobAsset = Omit<Asset, 'contentUrl'> & { contentUrl: string | null; deleted?: boolean };

@@ -6,6 +6,7 @@ import { assertPassword, CurrentUser, Roles, type AuthUser } from './common';
 import { PrismaService } from './prisma.service';
 import { StorageService } from './storage.service';
 import { parseBody, passwordSchema, safeText, uuidSchema } from './validation';
+import { parseQuotaPair } from './generation-quota';
 import { z } from 'zod';
 import { hashPassword } from './password-hash';
 import { AuthContextService } from './auth-context.service';
@@ -18,7 +19,12 @@ const statusSchema = z.object({ status: z.enum(['ACTIVE', 'DISABLED']) }).strict
 const resetSchema = z.object({ password: passwordSchema }).strict();
 const resetMfaSchema = z.object({ actorCode: z.string().regex(/^\d{6}$/) }).strict();
 const sessionDurationSchema = z.object({ duration: z.string().min(2).max(4) }).strict();
-const userGroupSchema = z.object({ name: safeText(64), description: safeText(300).optional().nullable() }).strict();
+const userGroupSchema = z.object({
+  name: safeText(64),
+  description: safeText(300).optional().nullable(),
+  quotaWindow: z.string().max(4).nullable().optional(),
+  quotaImages: z.number().int().min(1).max(1_000_000).nullable().optional(),
+}).strict();
 const userGroupsAssignmentSchema = z.object({ groupIds: z.array(uuidSchema).max(100) }).strict();
 
 @Roles('ADMIN')
@@ -80,7 +86,7 @@ export class AdminController {
   userGroups() {
     return this.prisma.userGroup.findMany({
       orderBy: { name: 'asc' },
-      include: { _count: { select: { users: true, models: true } } },
+      include: { _count: { select: { users: true, models: true, assetShares: true } } },
     });
   }
 
@@ -89,7 +95,10 @@ export class AdminController {
     const body = parseBody(userGroupSchema, raw);
     const name = body.name.trim();
     if (await this.prisma.userGroup.findUnique({ where: { name }, select: { id: true } })) throw new ConflictException('用户组名称已存在');
-    const group = await this.prisma.userGroup.create({ data: { name, description: body.description?.trim() || null } });
+    let quota;
+    try { quota = parseQuotaPair(body.quotaWindow ?? null, body.quotaImages ?? null); }
+    catch (error) { throw new BadRequestException((error as Error).message); }
+    const group = await this.prisma.userGroup.create({ data: { name, description: body.description?.trim() || null, ...quota } });
     await this.prisma.auditLog.create({ data: { actorId: actor.id, action: 'user-group.created', targetType: 'user-group', targetId: group.id, metadata: { name } } });
     return group;
   }
@@ -99,7 +108,12 @@ export class AdminController {
     const body = parseBody(userGroupSchema.partial().strict(), raw);
     const name = body.name?.trim();
     if (name && await this.prisma.userGroup.findFirst({ where: { name, id: { not: id } }, select: { id: true } })) throw new ConflictException('用户组名称已存在');
-    const group = await this.prisma.userGroup.update({ where: { id }, data: { ...(name ? { name } : {}), ...(body.description !== undefined ? { description: body.description?.trim() || null } : {}) } });
+    let quota = {};
+    if (body.quotaWindow !== undefined || body.quotaImages !== undefined) {
+      try { quota = parseQuotaPair(body.quotaWindow ?? null, body.quotaImages ?? null); }
+      catch (error) { throw new BadRequestException((error as Error).message); }
+    }
+    const group = await this.prisma.userGroup.update({ where: { id }, data: { ...(name ? { name } : {}), ...(body.description !== undefined ? { description: body.description?.trim() || null } : {}), ...quota } });
     await this.prisma.auditLog.create({ data: { actorId: actor.id, action: 'user-group.updated', targetType: 'user-group', targetId: id } });
     return group;
   }
@@ -185,6 +199,35 @@ export class AdminController {
     return { assetCount: result._count, storageBytes: result._sum.sizeBytes?.toString() ?? '0' };
   }
 
+  @Get('usage')
+  async usage(@Query('from') rawFrom?: string, @Query('to') rawTo?: string) {
+    const { from, to } = parseUsageRange(rawFrom, rawTo);
+    const rows = await this.prisma.quotaEvent.groupBy({
+      by: ['userId'],
+      where: { createdAt: { gte: from, lt: to } },
+      _sum: { imageCount: true },
+      _count: { _all: true },
+    });
+    const users = rows.length ? await this.prisma.user.findMany({
+      where: { id: { in: rows.map((row) => row.userId) } },
+      select: { id: true, username: true, displayName: true },
+    }) : [];
+    const byId = new Map(users.map((user) => [user.id, user]));
+    return {
+      from: from.toISOString(),
+      to: to.toISOString(),
+      items: rows
+        .map((row) => ({
+          userId: row.userId,
+          username: byId.get(row.userId)?.username ?? '',
+          displayName: byId.get(row.userId)?.displayName ?? byId.get(row.userId)?.username ?? '',
+          imageCount: row._sum.imageCount ?? 0,
+          events: row._count._all,
+        }))
+        .sort((left, right) => right.imageCount - left.imageCount || left.username.localeCompare(right.username)),
+    };
+  }
+
   @Get('audit-logs')
   auditLogs() {
     return this.prisma.auditLog.findMany({ take: 200, orderBy: { createdAt: 'desc' }, select: { id: true, action: true, targetType: true, targetId: true, metadata: true, createdAt: true, actor: { select: { username: true } } } });
@@ -214,4 +257,22 @@ export class AdminController {
       await this.lifecycle.releaseAndPublish(userId, job.id);
     }));
   }
+}
+
+function parseUsageRange(rawFrom?: string, rawTo?: string) {
+  const today = new Date();
+  const defaultTo = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + 1);
+  const defaultFrom = defaultTo - 7 * 24 * 60 * 60 * 1000;
+  const from = parseUtcDay(rawFrom, new Date(defaultFrom));
+  const to = rawTo ? new Date(parseUtcDay(rawTo, new Date(defaultTo)).getTime() + 24 * 60 * 60 * 1000) : new Date(defaultTo);
+  if (from.getTime() >= to.getTime()) throw new BadRequestException('用量起始日期必须早于结束日期');
+  return { from, to };
+}
+
+function parseUtcDay(raw: string | undefined, fallback: Date) {
+  if (!raw) return fallback;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) throw new BadRequestException('日期格式必须为 YYYY-MM-DD');
+  const date = new Date(`${raw}T00:00:00.000Z`);
+  if (!Number.isFinite(date.getTime())) throw new BadRequestException('日期格式必须为 YYYY-MM-DD');
+  return date;
 }

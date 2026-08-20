@@ -1,5 +1,6 @@
 import { KeyboardEvent, useState } from 'react';
-import type { ConversationSummary, StudioUser } from '@/lib/studio-types';
+import type { ConversationSummary, StudioUser, UsageSnapshot } from '@/lib/studio-types';
+import { formatStorageBytes } from '@/lib/format-bytes';
 import { useI18n } from '@/lib/i18n';
 
 type StudioSidebarProps = {
@@ -18,11 +19,12 @@ type StudioSidebarProps = {
   onShowProfile: () => void;
   onNavigateToAccount: () => void;
   onLogout: () => Promise<void>;
+  usage: UsageSnapshot | null;
 };
 
 export default function StudioSidebar({
   user, assetCount, conversations, activeConversationId, activeView, onNewCreation, onShowAssets,
-  onLoadConversation, hasMoreConversations, onLoadMoreConversations, onRenameConversation, onDeleteConversation, onShowProfile, onNavigateToAccount, onLogout,
+  onLoadConversation, hasMoreConversations, onLoadMoreConversations, onRenameConversation, onDeleteConversation, onShowProfile, onNavigateToAccount, onLogout, usage,
 }: StudioSidebarProps) {
   const { t } = useI18n();
   const [recentOpen, setRecentOpen] = useState(true);
@@ -90,6 +92,14 @@ export default function StudioSidebar({
       </div>}
       {error && <p className="error sidebar-error">{error}</p>}
     </nav>
+    <div className="sidebar-end">
+    {usage && <section className="usage-panel" aria-label={t('用量')}>
+      <p className="usage-row"><span>{t('存储')}</span><strong>{formatStorageBytes(usage.storageBytes)} / {formatStorageBytes(usage.storageQuotaBytes)}</strong></p>
+      {usage.policies.map((policy) => <p className={'usage-row ' + (policy.remaining === 0 ? 'usage-full' : '')} key={policy.groupId}>
+        <span title={policy.groupName}>{policy.groupName}</span>
+        <strong>{policy.used} / {policy.images} · {policy.window}</strong>
+      </p>)}
+    </section>}
     <div className="account-area">
       {accountOpen && <div className="account-popover" role="menu">
         <button className="account-menu-item" role="menuitem" onClick={() => { setAccountOpen(false); onShowProfile(); }}>{t('个人信息')}</button>
@@ -101,6 +111,7 @@ export default function StudioSidebar({
         <span className="account-copy"><strong>{user.displayName || user.username}</strong><span>{user.username}</span></span>
         <span className="account-chevron" aria-hidden="true">⌃</span>
       </button>
+    </div>
     </div>
   </aside>;
 }

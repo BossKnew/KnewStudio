@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { GenerationsController } from './generations.controller';
+import { conversationTitleFromPrompt, GenerationsController } from './generations.controller';
 
 describe('GenerationsController retry', () => {
   const user = { id: 'user-1', role: 'USER', groupIds: ['editors'] } as any;
@@ -78,15 +78,31 @@ describe('GenerationsController retry', () => {
       modelSnapshot: { displayName: 'Editor', upstreamModelId: 'secret-model', providerName: 'secret-provider' },
     });
     prisma.asset.findMany.mockResolvedValue([
-      { id: 'source-1', role: 'UPLOAD', width: 10, height: 20, mimeType: 'image/png', sizeBytes: 2n, note: null, deletedAt: null, thumbnail: null, job: null },
-      { id: 'source-2', role: 'OUTPUT', width: 30, height: 40, mimeType: 'image/jpeg', sizeBytes: 3n, note: 'ref', deletedAt: null, thumbnail: { id: 'thumb-2', deletedAt: null }, job: { prompt: 'source prompt' } },
+      { id: 'source-1', userId: 'user-1', role: 'UPLOAD', width: 10, height: 20, mimeType: 'image/png', sizeBytes: 2n, note: null, deletedAt: null, thumbnail: null, job: null },
+      { id: 'source-2', userId: 'user-1', role: 'OUTPUT', width: 30, height: 40, mimeType: 'image/jpeg', sizeBytes: 3n, note: 'ref', deletedAt: null, thumbnail: { id: 'thumb-2', deletedAt: null }, job: { prompt: 'source prompt' } },
     ]);
 
     const result = await controller.reuse(user, 'job-1');
 
     expect(result).toMatchObject({ prompt: 'combine these images', modelId: 'model-1', modelDisplayName: 'Editor', mode: 'IMAGE_EDIT', size: '1536x1024', quality: 'high', count: 2, requiresMaskRedraw: false });
     expect(result.sourceAssets.map(({ id }) => id)).toEqual(['source-2', 'source-1']);
+    expect(result.sourceAssets[0]).toMatchObject({ visibility: 'owned', note: 'ref', generationPrompt: 'source prompt' });
     expect(JSON.stringify(result)).not.toMatch(/secret-model|secret-provider/);
+  });
+
+  it('strips another user\'s prompt when reusing a shared reference', async () => {
+    prisma.generationJob.findFirst.mockResolvedValue({
+      modelId: 'model-1', mode: 'IMAGE_EDIT', prompt: 'edit with team ref',
+      parameters: { sourceAssetIds: ['shared-1'], size: '1024x1024', quality: 'high', count: 1 },
+      modelSnapshot: { displayName: 'Editor' },
+    });
+    prisma.asset.findMany.mockResolvedValue([
+      { id: 'shared-1', userId: 'owner-1', role: 'OUTPUT', width: 10, height: 10, mimeType: 'image/png', sizeBytes: 2n, note: 'private', deletedAt: null, thumbnail: null, job: { prompt: 'owner secret prompt' } },
+    ]);
+
+    const result = await controller.reuse(user, 'job-1');
+    expect(result.sourceAssets[0]).toMatchObject({ id: 'shared-1', visibility: 'shared', note: null, generationPrompt: null });
+    expect(JSON.stringify(result)).not.toMatch(/owner secret prompt|private/);
   });
 
   it('upserts a deduplicated prompt when creating a multi-reference edit', async () => {
@@ -112,7 +128,16 @@ describe('GenerationsController retry', () => {
     expect(transaction.promptEntry.upsert).toHaveBeenCalledWith(expect.objectContaining({
       where: { userId_prompt: { userId: 'user-1', prompt: 'combine these images' } },
     }));
-    expect(transaction.generationJob.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ parameters: expect.objectContaining({ sourceAssetIds: [sourceId] }) }) }));
+    expect(transaction.generationJob.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ imageCount: 1, parameters: expect.objectContaining({ sourceAssetIds: [sourceId] }) }) }));
+    expect(createQuota.reserveJobInTransaction).toHaveBeenCalledWith(transaction, user, 1, expect.objectContaining({ jobId: 'job-1', kind: 'SUBMIT' }));
+    expect(transaction.conversation.create).toHaveBeenCalledWith({ data: { userId: 'user-1', title: 'combine these images' } });
+  });
+
+  it('uses the first ten characters of a Chinese prompt and the first four words of an English prompt', () => {
+    expect(conversationTitleFromPrompt('雨夜霓虹街头的长镜头里')).toBe('雨夜霓虹街头的长镜头');
+    expect(conversationTitleFromPrompt('短题')).toBe('短题');
+    expect(conversationTitleFromPrompt('a cinematic wide shot of neon rain')).toBe('a cinematic wide shot');
+    expect(conversationTitleFromPrompt('combine these images')).toBe('combine these images');
   });
 
   it('requires every original reference to still exist before reuse', async () => {

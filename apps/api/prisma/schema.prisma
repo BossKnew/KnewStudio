@@ -58,11 +58,13 @@ model User {
   conversations    Conversation[]
   jobs             GenerationJob[]
   assets           Asset[]
+  quotaEvents      QuotaEvent[]
   promptEntries    PromptEntry[]
   auditLogs        AuditLog[]            @relation("AuditActor")
   usage            UserUsage?
   mfaCredential    MfaCredential?
   groupMemberships UserGroupMembership[]
+  assetShares      AssetShare[]          @relation("AssetShareActor")
 
   @@index([status])
   @@index([createdAt, id])
@@ -172,10 +174,13 @@ model UserGroup {
   id          String                @id @default(uuid())
   name        String                @unique
   description String?
+  quotaWindow String?
+  quotaImages Int?
   createdAt   DateTime              @default(now())
   updatedAt   DateTime              @updatedAt
   users       UserGroupMembership[]
   models      ModelGroupAccess[]
+  assetShares AssetShare[]
 }
 
 model UserGroupMembership {
@@ -245,10 +250,12 @@ model GenerationJob {
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
   quotaReleased  Boolean        @default(false)
+  imageCount     Int            @default(1)
   user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   conversation   Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   model          Model?         @relation(fields: [modelId], references: [id], onDelete: SetNull)
   assets         Asset[]
+  quotaEvents    QuotaEvent[]
 
   @@index([userId, createdAt])
   @@index([conversationId, createdAt, id])
@@ -276,12 +283,44 @@ model Asset {
   job          GenerationJob? @relation(fields: [jobId], references: [id], onDelete: Cascade)
   thumbnailFor Asset?         @relation("AssetThumbnail", fields: [thumbnailForId], references: [id], onDelete: Cascade)
   thumbnail    Asset?         @relation("AssetThumbnail")
+  shares       AssetShare[]
 
   @@index([userId, createdAt])
   @@index([userId, role, deletedAt])
   @@index([userId, role, contentHash])
   @@index([userId, deletedAt, createdAt, id])
   @@index([jobId])
+}
+
+model QuotaEvent {
+  id         String         @id @default(uuid())
+  userId     String
+  jobId      String
+  modelId    String?
+  imageCount Int
+  kind       String
+  createdAt  DateTime       @default(now())
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job        GenerationJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([jobId])
+  @@index([createdAt])
+}
+
+model AssetShare {
+  id         String    @id @default(uuid())
+  assetId    String
+  groupId    String
+  sharedById String
+  createdAt  DateTime  @default(now())
+  asset      Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  group      UserGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  sharedBy   User      @relation("AssetShareActor", fields: [sharedById], references: [id], onDelete: Cascade)
+
+  @@unique([assetId, groupId])
+  @@index([groupId, createdAt, id])
+  @@index([sharedById])
 }
 
 model AuditLog {

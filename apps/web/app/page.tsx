@@ -3,7 +3,8 @@ import { useRouter } from '@/lib/router';
 import { api, json } from '@/lib/api';
 import { downloadFiles, type DownloadResult } from '@/lib/download';
 import { isTerminalGenerationStatus, parseGenerationEvent } from '@/lib/generation-events';
-import { getActiveGenerationJobs, type Asset, type ConversationDetail, type ConversationSummary, type CursorPage, type DownloadAsset, type GenerationCreated, type GenerationJob, type GenerationReuse, type ReferenceSelection, type StudioModel, type StudioUser } from '@/lib/studio-types';
+import { getActiveGenerationJobs, type Asset, type ConversationDetail, type ConversationSummary, type CursorPage, type DownloadAsset, type GenerationCreated, type GenerationJob, type GenerationReuse, type ReferenceSelection, type StudioModel, type StudioUser, type UsageSnapshot } from '@/lib/studio-types';
+import type { OptionLabelMap } from '@/lib/option-labels';
 import AssetLibrary from '@/components/AssetLibrary';
 import ImageLightbox, { type LightboxImage } from '@/components/ImageLightbox';
 import JobHistory from '@/components/JobHistory';
@@ -41,6 +42,8 @@ export default function StudioPage() {
   const [actionError, setActionError] = useState('');
   const [syncError, setSyncError] = useState('');
   const [streamConnected, setStreamConnected] = useState(false);
+  const [usage, setUsage] = useState<UsageSnapshot | null>(null);
+  const [optionLabels, setOptionLabels] = useState<OptionLabelMap>({});
   const selectedConversationRef = useRef('');
   const handledTerminalJobs = useRef(new Set<string>());
   const collectionRefreshRef = useRef<Promise<void> | null>(null);
@@ -92,7 +95,8 @@ export default function StudioPage() {
     if (handledTerminalJobs.current.has(job.id)) return;
     handledTerminalJobs.current.add(job.id);
     try {
-      await refreshCollections();
+      const [usageSnapshot] = await Promise.all([api<UsageSnapshot>('/usage'), refreshCollections()]);
+      setUsage(usageSnapshot);
       setSyncError('');
     } catch {
       setSyncError(t('任务状态已更新，但摘要同步失败。请刷新页面。'));
@@ -105,8 +109,15 @@ export default function StudioPage() {
         const me = await api<{ user: StudioUser }>('/auth/me');
         setUser(me.user);
         if (me.user.mustChangePwd) return;
-        const [modelRows] = await Promise.all([api<StudioModel[]>('/models'), refreshCollections()]);
+        const [modelRows, usageSnapshot, labels] = await Promise.all([
+          api<StudioModel[]>('/models'),
+          api<UsageSnapshot>('/usage'),
+          api<OptionLabelMap>('/option-labels'),
+          refreshCollections(),
+        ]).then(([models, snapshot, labelMap]) => [models, snapshot, labelMap] as const);
         setModels(modelRows);
+        setUsage(usageSnapshot);
+        setOptionLabels(labels);
       } catch {
         router.replace('/login');
       }
@@ -191,6 +202,7 @@ export default function StudioPage() {
 
   async function handleCreated(result: GenerationCreated) {
     await loadConversation(result.conversationId);
+    try { setUsage(await api<UsageSnapshot>('/usage')); } catch { /* The next completed job can refresh usage. */ }
   }
 
   async function retryGeneration(jobId: string) {
@@ -245,6 +257,14 @@ export default function StudioPage() {
     if (viewer?.image.id === asset.id) setViewer(null);
   }
 
+  function updateAssetShares(id: string, groupIds: string[]) {
+    setAssets((items) => items.map((item) => item.id === id ? { ...item, sharedGroupIds: groupIds } : item));
+  }
+
+  function removeAssetShare(id: string, groupId: string) {
+    setAssets((items) => items.map((item) => item.id === id ? { ...item, sharedGroupIds: (item.sharedGroupIds ?? []).filter((value) => value !== groupId) } : item));
+  }
+
   function selectReference(asset: Asset, generationPrompt?: string) {
     setReferences((current) => {
       if (current.some((reference) => reference.kind === 'asset' && reference.asset.id === asset.id)) return current;
@@ -283,12 +303,13 @@ export default function StudioPage() {
       onShowProfile={() => setProfileOpen(true)}
       onNavigateToAccount={() => router.push(user.role === 'ADMIN' ? '/admin' : '/settings')}
       onLogout={logout}
+      usage={usage}
     />
     <main className="main">
       <div className="workspace-topbar"><LanguageSwitcher /></div>
       {syncError && <p className="error" role="alert">{syncError}</p>}
-      {view === 'assets' ? <AssetLibrary assets={assets} hasMore={Boolean(assetCursor)} onLoadMore={loadMoreAssets} onStartCreation={startNewCreation} onOpenAsset={(asset) => setViewer({ image: toLightboxImage(asset, t), reference: asset })} onAssetNoteSaved={updateAssetNote} onAssetDeleted={removeAsset} /> : <div className={`studio-workspace ${conversationId ? 'has-conversation' : ''}`}>
-        <StudioComposer models={models} conversationId={conversationId} references={references} onReferencesChange={setReferences} reusePreset={reusePreset} onReuseConsumed={() => setReusePreset(null)} onCreated={handleCreated} />
+      {view === 'assets' ? <AssetLibrary assets={assets} hasMore={Boolean(assetCursor)} onLoadMore={loadMoreAssets} onStartCreation={startNewCreation} onOpenAsset={(asset) => setViewer({ image: toLightboxImage(asset, t), reference: asset })} onUseAsReference={(asset) => selectReference(asset)} onAssetNoteSaved={updateAssetNote} onAssetDeleted={removeAsset} onAssetSharesSaved={updateAssetShares} onAssetUnshared={removeAssetShare} isAdmin={user.role === 'ADMIN'} /> : <div className={`studio-workspace ${conversationId ? 'has-conversation' : ''}`}>
+        <StudioComposer models={models} optionLabels={optionLabels} conversationId={conversationId} references={references} onReferencesChange={setReferences} reusePreset={reusePreset} onReuseConsumed={() => setReusePreset(null)} onCreated={handleCreated} />
         {conversation && <JobHistory conversation={conversation} onLoadOlder={loadOlderJobs} referenceIds={references.filter((reference) => reference.kind === 'asset').map((reference) => reference.asset.id)} onDeleteConversation={() => setDeleteTarget(conversations.find((item) => item.id === conversation.id) ?? { id: conversation.id, title: conversation.title, _count: { jobs: conversation.jobs.length } })} onUseAsReference={selectReference} onOpenImage={(asset) => setViewer({ image: toLightboxImage(asset, t), reference: asset })} onRetry={retryGeneration} onReuse={reuseGeneration} onDownloadConversation={downloadConversation} />}
       </div>}
     </main>
@@ -307,6 +328,7 @@ export default function StudioPage() {
 }
 
 function toLightboxImage(asset: Asset, t: (key: string) => string): LightboxImage {
+  const shared = asset.visibility === 'shared';
   return {
     id: asset.id,
     src: asset.contentUrl,
@@ -314,7 +336,9 @@ function toLightboxImage(asset: Asset, t: (key: string) => string): LightboxImag
     kind: asset.role === 'OUTPUT' ? t('生成图片') : t('上传图片'),
     width: asset.width,
     height: asset.height,
-    prompt: asset.generationPrompt,
-    note: asset.note,
+    prompt: shared ? null : asset.generationPrompt,
+    note: shared ? null : asset.note,
+    sharedBy: asset.sharedBy?.displayName ?? null,
+    sharedGroupName: asset.group?.name ?? null,
   };
 }
