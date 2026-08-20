@@ -1,6 +1,6 @@
 {
   "name": "knewstudio",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "private": true,
   "description": "Self-hosted image generation workspace with a secure Docker Compose deployment.",
   "author": "BossKnew",

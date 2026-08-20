@@ -1,9 +1,11 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useI18n } from '@/lib/i18n';
+import { optionLabelFor, type OptionLabelMap } from '@/lib/option-labels';
 
 type GenerationSettingsProps = {
   sizes: string[];
   qualities: string[];
+  optionLabels?: OptionLabelMap;
   maxImages: number;
   size: string;
   quality: string;
@@ -17,6 +19,7 @@ type GenerationSettingsProps = {
 export default function GenerationSettings({
   sizes,
   qualities,
+  optionLabels = {},
   maxImages,
   size,
   quality,
@@ -26,7 +29,8 @@ export default function GenerationSettings({
   onQualityChange,
   onCountChange,
 }: GenerationSettingsProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const labelOf = (value: string) => optionLabelFor(optionLabels, value, locale);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -62,15 +66,15 @@ export default function GenerationSettings({
       type="button"
       aria-expanded={open}
       aria-controls={panelId}
-      aria-label={`${t('生成设置选项')}：${t('选择尺寸')} ${size || t('未选择')}，${t('选择质量')} ${quality || t('未选择')}，${t('生成数量')} ${count}`}
+      aria-label={`${t('生成设置选项')}：${t('选择尺寸')} ${size ? labelOf(size) : t('未选择')}，${t('选择质量')} ${quality ? labelOf(quality) : t('未选择')}，${t('生成数量')} ${count}`}
       disabled={disabled}
       onClick={() => setOpen((current) => !current)}
     >
       <svg className="generation-settings-icon" viewBox="0 0 24 24" aria-hidden="true">
         <path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6" />
       </svg>
-      <span>{size || '—'}</span><span className="generation-settings-separator">|</span>
-      <span>{quality || '—'}</span><span className="generation-settings-separator">|</span>
+      <span>{size ? labelOf(size) : '—'}</span><span className="generation-settings-separator">|</span>
+      <span>{quality ? labelOf(quality) : '—'}</span><span className="generation-settings-separator">|</span>
       <span>{count}</span>
       <span className={`generation-settings-chevron ${open ? 'open' : ''}`} aria-hidden="true">⌄</span>
     </button>
@@ -78,13 +82,13 @@ export default function GenerationSettings({
     {open && <section className="generation-settings-popover" id={panelId} aria-label={t('生成设置选项')}>
       <SettingGroup label={t('选择尺寸')}>
         <div className="generation-setting-options size-options">
-          {sizes.map((item) => <ChoiceButton key={item} active={item === size} onClick={() => onSizeChange(item)}>{item}</ChoiceButton>)}
+          {sizes.map((item) => <ChoiceButton key={item} active={item === size} onClick={() => onSizeChange(item)}>{labelOf(item)}</ChoiceButton>)}
         </div>
       </SettingGroup>
 
       <SettingGroup label={t('选择质量')}>
         <div className="generation-setting-options quality-options">
-          {qualities.map((item) => <ChoiceButton key={item} active={item === quality} onClick={() => onQualityChange(item)}>{item}</ChoiceButton>)}
+          {qualities.map((item) => <ChoiceButton key={item} active={item === quality} onClick={() => onQualityChange(item)}>{labelOf(item)}</ChoiceButton>)}
         </div>
       </SettingGroup>
 

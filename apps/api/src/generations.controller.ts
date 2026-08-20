@@ -16,6 +16,7 @@ import { GENERATION_QUEUE_OPTIONS } from './domain-constants';
 import { GenerationEventsService } from './generation-events.service';
 import { GenerationLifecycleService } from './generation-lifecycle.service';
 import { serializeAssetLinks } from './asset-response';
+import { accessibleReferencedAssetWhere, accessibleSourceWhere } from './asset-access';
 
 const generationSchema = z.object({
   prompt: safeText(8000), modelId: uuidSchema, mode: z.enum(['TEXT_TO_IMAGE', 'IMAGE_EDIT', 'INPAINT']).optional(),
@@ -30,6 +31,16 @@ type GenerationParameters = {
   sourceAssetIds?: string[];
   maskAssetId?: string | null;
 };
+
+const CJK = /[\u3400-\u9fff\uf900-\ufaff]/;
+
+export function conversationTitleFromPrompt(prompt: string) {
+  const trimmed = prompt.trim();
+  if (CJK.test(trimmed)) return Array.from(trimmed).slice(0, 10).join('');
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (words.length) return words.slice(0, 4).join(' ');
+  return Array.from(trimmed).slice(0, 10).join('');
+}
 
 function readGenerationParameters(value: unknown): GenerationParameters {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -80,7 +91,7 @@ export class GenerationsController {
     if (sourceIds.length > model.maxInputImages) throw new BadRequestException(`该模型最多支持 ${model.maxInputImages} 张参考图`);
     if (mode === 'TEXT_TO_IMAGE' && sourceIds.length) throw new BadRequestException('文生图不支持参考图');
     const assetIds = [...sourceIds, ...(body.maskAssetId ? [body.maskAssetId] : [])];
-    const assets = assetIds.length ? await this.prisma.asset.findMany({ where: { id: { in: assetIds }, userId: user.id, deletedAt: null } }) : [];
+    const assets = assetIds.length ? await this.prisma.asset.findMany({ where: { id: { in: assetIds }, ...accessibleReferencedAssetWhere(user) } }) : [];
     if (assets.length !== new Set(assetIds).size) throw new BadRequestException('引用图片不存在');
     if (mode !== 'TEXT_TO_IMAGE' && !sourceIds.length) throw new BadRequestException('编辑模式必须提供原图');
     if (mode === 'INPAINT' && !body.maskAssetId) throw new BadRequestException('局部重绘必须提供遮罩');
@@ -92,8 +103,7 @@ export class GenerationsController {
     let job;
     try {
       const result = await this.prisma.$transaction(async (transaction) => {
-        await this.quota.reserveJobInTransaction(transaction, user.id);
-        const targetConversationId = conversationId ?? (await transaction.conversation.create({ data: { userId: user.id, title: prompt.slice(0, 30) } })).id;
+        const targetConversationId = conversationId ?? (await transaction.conversation.create({ data: { userId: user.id, title: conversationTitleFromPrompt(prompt) } })).id;
         const promptUsedAt = new Date();
         await transaction.promptEntry.upsert({
           where: { userId_prompt: { userId: user.id, prompt } },
@@ -101,9 +111,10 @@ export class GenerationsController {
           update: { usageCount: { increment: 1 }, lastUsedAt: promptUsedAt },
         });
         const created = await transaction.generationJob.create({ data: {
-          userId: user.id, conversationId: targetConversationId, modelId: model.id, mode, prompt, parameters,
+          userId: user.id, conversationId: targetConversationId, modelId: model.id, mode, prompt, parameters, imageCount: count,
           modelSnapshot: { displayName: model.displayName, upstreamModelId: model.upstreamModelId, providerName: model.provider.name },
         }});
+        await this.quota.reserveJobInTransaction(transaction, user, count, { jobId: created.id, modelId: model.id, kind: 'SUBMIT' });
         if (body.maskAssetId) await transaction.asset.updateMany({ where: { id: body.maskAssetId, userId: user.id }, data: { jobId: created.id, role: 'MASK' } });
         return { created, targetConversationId };
       });
@@ -132,9 +143,9 @@ export class GenerationsController {
     const parameters = readGenerationParameters(job.parameters);
     const sourceAssetIds = [...new Set(parameters.sourceAssetIds ?? [])];
     const sourceRows = sourceAssetIds.length ? await this.prisma.asset.findMany({
-      where: { id: { in: sourceAssetIds }, userId: user.id, deletedAt: null, role: { in: ['UPLOAD', 'OUTPUT'] } },
+      where: { id: { in: sourceAssetIds }, ...accessibleSourceWhere(user) },
       select: {
-        id: true, role: true, width: true, height: true, mimeType: true, sizeBytes: true, note: true, deletedAt: true,
+        id: true, userId: true, role: true, width: true, height: true, mimeType: true, sizeBytes: true, note: true, deletedAt: true,
         thumbnail: { select: { id: true, deletedAt: true } },
         job: { select: { prompt: true } },
       },
@@ -153,6 +164,7 @@ export class GenerationsController {
       count: Math.max(1, Number(parameters.count) || 1),
       sourceAssets: sourceAssetIds.map((assetId) => {
         const asset = sourceById.get(assetId)!;
+        const owned = asset.userId === user.id;
         return {
           id: asset.id,
           role: asset.role,
@@ -160,8 +172,9 @@ export class GenerationsController {
           height: asset.height,
           mimeType: asset.mimeType,
           sizeBytes: asset.sizeBytes.toString(),
-          note: asset.note ?? null,
-          generationPrompt: asset.job?.prompt ?? null,
+          visibility: owned ? 'owned' : 'shared',
+          note: owned ? asset.note ?? null : null,
+          generationPrompt: owned ? asset.job?.prompt ?? null : null,
           ...serializeAssetLinks(asset),
         };
       }),
@@ -181,10 +194,10 @@ export class GenerationsController {
     const parameters = readGenerationParameters(job.parameters);
     const sourceAssetIds = parameters.sourceAssetIds ?? [];
     const requiredAssetIds = [...sourceAssetIds, ...(parameters.maskAssetId ? [parameters.maskAssetId] : [])];
-    const retryAssets = requiredAssetIds.length ? await this.prisma.asset.findMany({ where: { id: { in: requiredAssetIds }, userId: user.id, deletedAt: null } }) : [];
+    const retryAssets = requiredAssetIds.length ? await this.prisma.asset.findMany({ where: { id: { in: requiredAssetIds }, ...accessibleReferencedAssetWhere(user) } }) : [];
     if (retryAssets.length !== new Set(requiredAssetIds).size) throw new BadRequestException(job.mode === 'INPAINT' ? '原任务的参考图或遮罩已不存在，无法重试' : '原任务的参考图已不存在，无法重试');
 
-    await this.quota.reacquireJob(user.id, job.id);
+    await this.quota.reacquireJob(user, job.id, job.imageCount || Math.max(1, Number(parameters.count) || 1), job.modelId);
     try {
       await this.assets.removeJobOutputs(user.id, job.id);
     } catch (error) {

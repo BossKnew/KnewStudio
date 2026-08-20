@@ -18,6 +18,8 @@ import { securityConfig } from './security-config';
 import { AssetLifecycleService } from './asset-lifecycle.service';
 import { providerRequestHeaders } from './provider-credentials';
 import { GenerationLifecycleService } from './generation-lifecycle.service';
+import { accessibleSourceWhere } from './asset-access';
+import type { AuthUser } from './common';
 
 type ProviderImageSource = { path?: string; url?: string };
 type StreamJsonModule = typeof import('stream-json');
@@ -390,7 +392,7 @@ export class GenerationProcessor extends WorkerHost {
         prompt: true,
         parameters: true,
         status: true,
-        user: { select: { status: true } },
+        user: { select: { status: true, role: true } },
         model: {
           select: {
             upstreamModelId: true,
@@ -424,14 +426,15 @@ export class GenerationProcessor extends WorkerHost {
         for (const [key, value] of Object.entries(requestParameters)) form.set(key, String(value));
         const sourceIds = Array.isArray(params.sourceAssetIds) ? params.sourceAssetIds : [];
         const imageField = providerEditImageField(sourceIds.length);
-        let firstSource: Awaited<ReturnType<GenerationProcessor['ownedAsset']>> | undefined;
+        const reader = await this.jobReader(job.userId, job.user.role);
+        let firstSource: Awaited<ReturnType<GenerationProcessor['sourceAsset']>> | undefined;
         for (const assetId of sourceIds) {
-          const asset = await this.ownedAsset(job.userId, assetId);
+          const asset = await this.sourceAsset(reader, assetId);
           firstSource ??= asset;
           form.append(imageField, await openAsBlob(this.storage.filePath(asset.objectKey), { type: asset.mimeType }), asset.originalName ?? 'image.png');
         }
         if (params.maskAssetId) {
-          const mask = await this.ownedAsset(job.userId, params.maskAssetId);
+          const mask = await this.ownedMask(job.userId, params.maskAssetId);
           let maskPath = this.storage.filePath(mask.objectKey);
           let maskType = mask.mimeType;
           if (firstSource?.width && firstSource.height && (mask.width !== firstSource.width || mask.height !== firstSource.height)) {
@@ -460,7 +463,7 @@ export class GenerationProcessor extends WorkerHost {
       }
       try {
         if (!response.ok && providerErrorCode(response.body) === 'text_conversation_not_supported') {
-          const fallback = await this.tryChatImageFallback({ id: job.id, userId: job.userId, prompt: job.prompt, model: job.model }, params, headers, responsePath);
+          const fallback = await this.tryChatImageFallback({ id: job.id, userId: job.userId, prompt: job.prompt, user: job.user, model: job.model }, params, headers, responsePath);
           if (fallback) {
             responsePath = fallback.responsePath;
             response = fallback.response;
@@ -519,7 +522,7 @@ export class GenerationProcessor extends WorkerHost {
   }
 
   private async tryChatImageFallback(
-    job: { id: string; userId: string; prompt: string; model: { upstreamModelId: string; provider: { baseUrl: string; timeoutSeconds: number } } },
+    job: { id: string; userId: string; prompt: string; user: { role: 'USER' | 'ADMIN' }; model: { upstreamModelId: string; provider: { baseUrl: string; timeoutSeconds: number } } },
     params: { sourceAssetIds?: unknown; maskAssetId?: unknown; count?: unknown },
     headers: Record<string, string>,
     failedPath: string,
@@ -527,14 +530,17 @@ export class GenerationProcessor extends WorkerHost {
     const chatPath = await this.storage.createStagingPath('.chat');
     try {
       const imageDataUrls: string[] = [];
-      for (const assetId of Array.isArray(params.sourceAssetIds) ? params.sourceAssetIds : []) {
-        if (typeof assetId !== 'string') continue;
-        const asset = await this.ownedAsset(job.userId, assetId);
-        imageDataUrls.push(await this.fileToDataUrl(this.storage.filePath(asset.objectKey), asset.mimeType));
-      }
-      if (typeof params.maskAssetId === 'string') {
-        const mask = await this.ownedAsset(job.userId, params.maskAssetId);
-        imageDataUrls.push(await this.fileToDataUrl(this.storage.filePath(mask.objectKey), mask.mimeType));
+      const sourceIds = Array.isArray(params.sourceAssetIds) ? params.sourceAssetIds.filter((id): id is string => typeof id === 'string') : [];
+      if (sourceIds.length || typeof params.maskAssetId === 'string') {
+        const reader = await this.jobReader(job.userId, job.user.role);
+        for (const assetId of sourceIds) {
+          const asset = await this.sourceAsset(reader, assetId);
+          imageDataUrls.push(await this.fileToDataUrl(this.storage.filePath(asset.objectKey), asset.mimeType));
+        }
+        if (typeof params.maskAssetId === 'string') {
+          const mask = await this.ownedMask(job.userId, params.maskAssetId);
+          imageDataUrls.push(await this.fileToDataUrl(this.storage.filePath(mask.objectKey), mask.mimeType));
+        }
       }
       const chatHeaders = { ...headers, 'Content-Type': 'application/json' };
       const response = await this.http.requestToFile(
@@ -579,9 +585,24 @@ export class GenerationProcessor extends WorkerHost {
     await this.assets.persistNormalized({ userId, jobId, role: 'OUTPUT', image });
   }
 
-  private async ownedAsset(userId: string, id: string) {
+  private async jobReader(userId: string, role: AuthUser['role']): Promise<Pick<AuthUser, 'id' | 'role' | 'groupIds'>> {
+    if (role === 'ADMIN') return { id: userId, role, groupIds: [] };
+    const rows = await this.prisma.userGroupMembership.findMany({ where: { userId }, select: { groupId: true } });
+    return { id: userId, role, groupIds: rows.map(({ groupId }) => groupId) };
+  }
+
+  private async sourceAsset(user: Pick<AuthUser, 'id' | 'role' | 'groupIds'>, id: string) {
     const asset = await this.prisma.asset.findFirst({
-      where: { id, userId, deletedAt: null },
+      where: { id, ...accessibleSourceWhere(user as AuthUser) },
+      select: { objectKey: true, mimeType: true, originalName: true, width: true, height: true },
+    });
+    if (!asset) throw new Error('引用图片不存在');
+    return asset;
+  }
+
+  private async ownedMask(userId: string, id: string) {
+    const asset = await this.prisma.asset.findFirst({
+      where: { id, userId, deletedAt: null, role: 'MASK' },
       select: { objectKey: true, mimeType: true, originalName: true, width: true, height: true },
     });
     if (!asset) throw new Error('引用图片不存在');

@@ -1,11 +1,11 @@
-import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Query, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Put, Query, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { CurrentUser, type AuthUser } from './common';
 import { PrismaService } from './prisma.service';
 import { StorageService } from './storage.service';
 import { UploadAdmissionInterceptor } from './upload-admission.interceptor';
-import { parseBody } from './validation';
+import { parseBody, uuidSchema } from './validation';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
@@ -15,8 +15,11 @@ import { MAX_IMAGE_BYTES } from './domain-constants';
 import { AssetLifecycleService } from './asset-lifecycle.service';
 import { cursorWhere, decodeCursor, encodeCursor, pageLimit } from './pagination';
 import { serializeAssetLinks } from './asset-response';
+import { canReadAsset, canShareAsset, canUnshareAsset } from './asset-access';
 
 const noteSchema = z.object({ note: z.string().max(1000).nullable() }).strict();
+const shareSchema = z.object({ groupIds: z.array(uuidSchema).max(100) }).strict();
+const shareSelect = { id: true, groupId: true, createdAt: true, group: { select: { id: true, name: true } } } as const;
 
 @Controller()
 export class AssetsController {
@@ -49,7 +52,7 @@ export class AssetsController {
       userId: user.id, role, image,
       originalName: file.originalname.replace(/[\r\n]/g, '').slice(0, 255),
     });
-    return this.serialize(asset);
+    return this.serializeOwned(asset);
   }
 
   @Get('assets')
@@ -59,14 +62,99 @@ export class AssetsController {
     const where = { userId: user.id, role: { in: ['UPLOAD' as const, 'OUTPUT' as const] }, deletedAt: null, ...cursorWhere('createdAt', cursor) };
     const [rows, total] = await Promise.all([this.prisma.asset.findMany({
       where,
-      include: { job: { select: { prompt: true } }, thumbnail: { select: { id: true, deletedAt: true } } },
+      include: { job: { select: { prompt: true } }, thumbnail: { select: { id: true, deletedAt: true } }, shares: { select: { groupId: true } } },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
     }), this.prisma.asset.count({ where: { userId: user.id, role: { in: ['UPLOAD', 'OUTPUT'] }, deletedAt: null } })]);
     const hasMore = rows.length > limit;
     const assets = rows.slice(0, limit);
     const last = assets.at(-1);
-    return { items: assets.map((asset) => this.serialize(asset)), nextCursor: hasMore && last ? encodeCursor(last.createdAt, last.id) : null, total };
+    return { items: assets.map((asset) => this.serializeOwned(asset)), nextCursor: hasMore && last ? encodeCursor(last.createdAt, last.id) : null, total };
+  }
+
+  @Get('assets/shared')
+  async shared(@CurrentUser() user: AuthUser, @Query('limit') rawLimit?: string, @Query('cursor') rawCursor?: string, @Query('groupId') rawGroupId?: string) {
+    const limit = pageLimit(rawLimit, 40);
+    const cursor = decodeCursor(rawCursor);
+    const groupId = rawGroupId ? parseGroupId(rawGroupId) : undefined;
+    const visibleGroupIds = await this.visibleGroupIds(user, groupId);
+    if (!visibleGroupIds.length) return { items: [], nextCursor: null, total: 0 };
+    const where = {
+      groupId: { in: visibleGroupIds },
+      asset: { deletedAt: null, role: { in: ['UPLOAD' as const, 'OUTPUT' as const] } },
+      ...cursorWhere('createdAt', cursor),
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.assetShare.findMany({
+        where,
+        include: {
+          group: { select: { id: true, name: true } },
+          sharedBy: { select: { displayName: true, username: true } },
+          asset: { include: { thumbnail: { select: { id: true, deletedAt: true } } } },
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit + 1,
+      }),
+      this.prisma.assetShare.count({ where }),
+    ]);
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    return { items: page.map((row) => this.serializeShared(row, user)), nextCursor: hasMore && last ? encodeCursor(last.createdAt, last.id) : null, total };
+  }
+
+  @Get('assets/:id/shares')
+  async shares(@CurrentUser() user: AuthUser, @Param('id', new ParseUUIDPipe({ version: '4' })) id: string) {
+    const asset = await this.prisma.asset.findFirst({ where: { id, userId: user.id, deletedAt: null }, select: { id: true } });
+    if (!asset) throw new NotFoundException();
+    const items = await this.prisma.assetShare.findMany({
+      where: { assetId: id },
+      orderBy: { createdAt: 'asc' },
+      select: shareSelect,
+    });
+    return { items: items.map((item) => ({ id: item.id, groupId: item.groupId, createdAt: item.createdAt, group: item.group })) };
+  }
+
+  @Put('assets/:id/shares')
+  async replaceShares(@CurrentUser() user: AuthUser, @Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @Body() raw: unknown) {
+    const body = parseBody(shareSchema, raw);
+    const groupIds = [...new Set(body.groupIds)];
+    if (groupIds.length !== body.groupIds.length) throw new BadRequestException('用户组不能重复');
+    const asset = await this.prisma.asset.findFirst({ where: { id, deletedAt: null }, select: { id: true, userId: true, role: true, deletedAt: true } });
+    if (!canShareAsset(user, asset)) throw new NotFoundException();
+    const allowedGroupIds = user.role === 'ADMIN' ? groupIds : groupIds.filter((groupId) => (user.groupIds ?? []).includes(groupId));
+    if (allowedGroupIds.length !== groupIds.length) throw new BadRequestException('只能分享到你所属的用户组');
+    if (groupIds.length && await this.prisma.userGroup.count({ where: { id: { in: groupIds } } }) !== groupIds.length) throw new BadRequestException('包含不存在的用户组');
+
+    const current = await this.prisma.assetShare.findMany({ where: { assetId: id }, select: { groupId: true } });
+    const currentIds = new Set(current.map(({ groupId }) => groupId));
+    const nextIds = new Set(groupIds);
+    const added = groupIds.filter((groupId) => !currentIds.has(groupId));
+    const removed = current.map(({ groupId }) => groupId).filter((groupId) => !nextIds.has(groupId));
+
+    await this.prisma.$transaction(async (tx) => {
+      if (removed.length) await tx.assetShare.deleteMany({ where: { assetId: id, groupId: { in: removed } } });
+      if (added.length) await tx.assetShare.createMany({ data: added.map((groupId) => ({ assetId: id, groupId, sharedById: user.id })) });
+      if (added.length) await tx.auditLog.create({ data: { actorId: user.id, action: 'asset.shared', targetType: 'asset', targetId: id, metadata: { groupIds: added } } });
+      if (removed.length) await tx.auditLog.create({ data: { actorId: user.id, action: 'asset.unshared', targetType: 'asset', targetId: id, metadata: { groupIds: removed } } });
+    });
+
+    const items = await this.prisma.assetShare.findMany({ where: { assetId: id }, orderBy: { createdAt: 'asc' }, select: shareSelect });
+    return { items: items.map((item) => ({ id: item.id, groupId: item.groupId, createdAt: item.createdAt, group: item.group })) };
+  }
+
+  @Delete('assets/:id/shares/:groupId')
+  async unshare(
+    @CurrentUser() user: AuthUser,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('groupId', new ParseUUIDPipe({ version: '4' })) groupId: string,
+  ) {
+    const asset = await this.prisma.asset.findFirst({ where: { id, deletedAt: null }, select: { id: true, userId: true, deletedAt: true } });
+    if (!canUnshareAsset(user, asset)) throw new NotFoundException();
+    const result = await this.prisma.assetShare.deleteMany({ where: { assetId: id, groupId } });
+    if (!result.count) throw new NotFoundException();
+    await this.prisma.auditLog.create({ data: { actorId: user.id, action: 'asset.unshared', targetType: 'asset', targetId: id, metadata: { groupIds: [groupId] } } });
+    return { ok: true };
   }
 
   @Patch('assets/:id')
@@ -83,21 +171,25 @@ export class AssetsController {
   @Get('assets/:id/content')
   async content(@CurrentUser() user: AuthUser, @Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @Res() response: Response) {
     const asset = await this.prisma.asset.findFirst({
-      where: { id, userId: user.id, deletedAt: null },
-      select: { objectKey: true, mimeType: true, sizeBytes: true },
+      where: { id, deletedAt: null },
+      select: {
+        objectKey: true, mimeType: true, sizeBytes: true, userId: true, role: true, deletedAt: true,
+        shares: { select: { groupId: true } },
+        thumbnailFor: { select: { userId: true, role: true, deletedAt: true, shares: { select: { groupId: true } } } },
+      },
     });
-    if (!asset) throw new NotFoundException();
-    response.setHeader('Content-Type', asset.mimeType);
+    if (!canReadAsset(user, asset)) throw new NotFoundException();
+    response.setHeader('Content-Type', asset!.mimeType);
     response.setHeader('Cache-Control', 'private, max-age=3600');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     if (process.env.MEDIA_X_ACCEL_REDIRECT === 'true') {
-      const safeObjectKey = asset.objectKey.split('/').map(encodeURIComponent).join('/');
+      const safeObjectKey = asset!.objectKey.split('/').map(encodeURIComponent).join('/');
       response.setHeader('X-Accel-Redirect', `/_protected_media/${safeObjectKey}`);
       response.end();
       return;
     }
-    response.setHeader('Content-Length', asset.sizeBytes.toString());
-    const stream = this.storage.createReadStream(asset.objectKey);
+    response.setHeader('Content-Length', asset!.sizeBytes.toString());
+    const stream = this.storage.createReadStream(asset!.objectKey);
     stream.on('error', () => response.destroy());
     stream.pipe(response);
   }
@@ -108,19 +200,66 @@ export class AssetsController {
     return { ok: true };
   }
 
-  private serialize<T extends { id: string; objectKey: string; sizeBytes: bigint; deletedAt: Date | null; note: string | null; contentHash?: string | null; job?: { prompt: string } | null; thumbnail?: { id: string; deletedAt: Date | null } | null }>(asset: T): Record<string, unknown> {
-    const { job, thumbnail, contentHash: _contentHash, ...storedAsset } = asset;
+  private async visibleGroupIds(user: AuthUser, groupId?: string) {
+    if (user.role === 'ADMIN') {
+      if (!groupId) return [];
+      return [groupId];
+    }
+    const memberships = user.groupIds ?? [];
+    if (groupId) {
+      if (!memberships.includes(groupId)) throw new BadRequestException('无权访问该用户组');
+      return [groupId];
+    }
+    return memberships;
+  }
+
+  private serializeOwned<T extends { id: string; objectKey: string; sizeBytes: bigint; deletedAt: Date | null; note: string | null; contentHash?: string | null; job?: { prompt: string } | null; thumbnail?: { id: string; deletedAt: Date | null } | null; shares?: Array<{ groupId: string }> }>(asset: T): Record<string, unknown> {
+    const { job, thumbnail, contentHash: _contentHash, shares, ...storedAsset } = asset;
     return {
       ...storedAsset,
       note: storedAsset.note ?? null,
       generationPrompt: job?.prompt ?? null,
+      visibility: 'owned',
+      sharedGroupIds: shares?.map(({ groupId }) => groupId) ?? [],
       sizeBytes: asset.sizeBytes.toString(),
       ...serializeAssetLinks({ id: asset.id, deletedAt: storedAsset.deletedAt, thumbnail }),
       objectKey: undefined,
+    };
+  }
+
+  private serializeShared(row: {
+    id: string;
+    createdAt: Date;
+    group: { id: string; name: string };
+    sharedBy: { displayName: string | null; username: string };
+    asset: { id: string; userId: string; role: string; mimeType: string; sizeBytes: bigint; width: number | null; height: number | null; deletedAt: Date | null; objectKey: string; note: string | null; thumbnail?: { id: string; deletedAt: Date | null } | null };
+  }, user: AuthUser): Record<string, unknown> {
+    return {
+      id: row.asset.id,
+      shareId: row.id,
+      role: row.asset.role,
+      mimeType: row.asset.mimeType,
+      width: row.asset.width,
+      height: row.asset.height,
+      sizeBytes: row.asset.sizeBytes.toString(),
+      visibility: 'shared',
+      sharedAt: row.createdAt,
+      group: row.group,
+      sharedBy: { displayName: row.sharedBy.displayName || row.sharedBy.username },
+      canUnshare: row.asset.userId === user.id || user.role === 'ADMIN',
+      note: null,
+      generationPrompt: null,
+      ...serializeAssetLinks({ id: row.asset.id, deletedAt: row.asset.deletedAt, thumbnail: row.asset.thumbnail }),
     };
   }
 }
 
 function isMaskUpload(value: unknown) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value) && (value as Record<string, unknown>).role === 'MASK');
+}
+
+function parseGroupId(raw: string) {
+  const parsed = uuidSchema.safeParse(raw);
+  if (!parsed.success) throw new BadRequestException('用户组无效');
+  return parsed.data;
 }

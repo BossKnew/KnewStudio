@@ -5,6 +5,8 @@ import { RedisService } from './redis.service';
 import { securityConfig } from './security-config';
 import { randomUUID } from 'node:crypto';
 import { ACTIVE_JOB_STATUSES } from './domain-constants';
+import type { AuthUser } from './common';
+import { evaluatePolicies, eventsInWindow, quotaPoliciesFromGroups, retryAfterSeconds, usedImages } from './generation-quota';
 
 @Injectable()
 export class QuotaService implements OnModuleInit, OnModuleDestroy {
@@ -22,8 +24,8 @@ export class QuotaService implements OnModuleInit, OnModuleDestroy {
 
   onModuleDestroy() { if (this.reconciliationTimer) clearInterval(this.reconciliationTimer); }
 
-  private exceeded(message: string) {
-    return new HttpException({ statusCode: 429, errorCode: 'QUOTA_EXCEEDED', message, retryAfterSeconds: 60 }, HttpStatus.TOO_MANY_REQUESTS);
+  private exceeded(message: string, retryAfterSeconds = 60) {
+    return new HttpException({ statusCode: 429, errorCode: 'QUOTA_EXCEEDED', message, retryAfterSeconds }, HttpStatus.TOO_MANY_REQUESTS);
   }
 
   async reserveStorage(userId: string, bytes: bigint) {
@@ -41,17 +43,26 @@ export class QuotaService implements OnModuleInit, OnModuleDestroy {
     await this.prisma.$executeRaw`UPDATE "UserUsage" SET "storageBytes" = GREATEST("storageBytes" - ${bytes}, 0), "updatedAt" = CURRENT_TIMESTAMP WHERE "userId" = ${userId}`;
   }
 
-  async reserveJobInTransaction(tx: Prisma.TransactionClient, userId: string) {
+  async reserveJobInTransaction(
+    tx: Prisma.TransactionClient,
+    user: Pick<AuthUser, 'id' | 'role' | 'groupIds'>,
+    imageCount: number,
+    context: { jobId: string; modelId?: string | null; kind: 'SUBMIT' | 'RETRY' },
+  ) {
     const global = await tx.globalUsage.updateMany({
       where: { id: 'global', activeJobs: { lt: securityConfig.queuedJobsGlobal() } },
       data: { activeJobs: { increment: 1 } },
     });
     if (!global.count) throw this.exceeded('系统任务队列已满');
     const result = await tx.userUsage.updateMany({
-      where: { userId, activeJobs: { lt: securityConfig.activeJobsPerUser() } },
+      where: { userId: user.id, activeJobs: { lt: securityConfig.activeJobsPerUser() } },
       data: { activeJobs: { increment: 1 } },
     });
     if (!result.count) throw this.exceeded('活动任务数量已达上限');
+    await this.assertImageQuota(tx, user, imageCount);
+    await tx.quotaEvent.create({
+      data: { userId: user.id, jobId: context.jobId, modelId: context.modelId ?? null, imageCount, kind: context.kind },
+    });
   }
 
   async releaseJob(userId: string, jobId: string) {
@@ -63,15 +74,73 @@ export class QuotaService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async reacquireJob(userId: string, jobId: string) {
+  async reacquireJob(user: Pick<AuthUser, 'id' | 'role' | 'groupIds'>, jobId: string, imageCount: number, modelId?: string | null) {
     await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.generationJob.updateMany({
-        where: { id: jobId, userId, status: 'FAILED', quotaReleased: true },
+        where: { id: jobId, userId: user.id, status: 'FAILED', quotaReleased: true },
         data: { status: 'QUEUED', quotaReleased: false, errorCode: null, errorMessage: null, startedAt: null, finishedAt: null },
       });
       if (!claimed.count) throw new ConflictException('任务状态已变化，请刷新后重试');
-      await this.reserveJobInTransaction(tx, userId);
+      await this.reserveJobInTransaction(tx, user, imageCount, { jobId, modelId, kind: 'RETRY' });
     });
+  }
+
+  async currentUsage(user: Pick<AuthUser, 'id' | 'role' | 'groupIds'>) {
+    const now = new Date();
+    const [usage, groups] = await Promise.all([
+      this.prisma.userUsage.findUnique({ where: { userId: user.id }, select: { storageBytes: true } }),
+      user.groupIds.length ? this.prisma.userGroup.findMany({
+        where: { id: { in: user.groupIds } },
+        select: { id: true, name: true, quotaWindow: true, quotaImages: true },
+        orderBy: { name: 'asc' },
+      }) : Promise.resolve([]),
+    ]);
+    const policies = user.role === 'ADMIN' ? [] : quotaPoliciesFromGroups(groups);
+    const maxWindow = policies.reduce((max, policy) => Math.max(max, policy.windowSeconds), 0);
+    const events = maxWindow ? await this.prisma.quotaEvent.findMany({
+      where: { userId: user.id, createdAt: { gt: new Date(now.getTime() - maxWindow * 1000) } },
+      select: { createdAt: true, imageCount: true },
+      orderBy: { createdAt: 'asc' },
+    }) : [];
+    return {
+      storageBytes: usage?.storageBytes.toString() ?? '0',
+      storageQuotaBytes: securityConfig.storageBytesPerUser().toString(),
+      policies: policies.map((policy) => {
+        const inWindow = eventsInWindow(events, now, policy.windowSeconds);
+        const used = usedImages(inWindow);
+        const remaining = Math.max(0, policy.images - used);
+        const oldest = inWindow[0];
+        return {
+          groupId: policy.groupId,
+          groupName: policy.name,
+          window: policy.window,
+          images: policy.images,
+          used,
+          remaining,
+          resetAt: oldest ? new Date(oldest.createdAt.getTime() + policy.windowSeconds * 1000).toISOString() : null,
+          retryAfterSeconds: remaining === 0 ? retryAfterSeconds(inWindow, policy.windowSeconds, policy.images, 1, now) : 0,
+        };
+      }),
+    };
+  }
+
+  private async assertImageQuota(tx: Prisma.TransactionClient, user: Pick<AuthUser, 'id' | 'role' | 'groupIds'>, imageCount: number) {
+    if (user.role === 'ADMIN' || !user.groupIds.length) return;
+    const groups = await tx.userGroup.findMany({
+      where: { id: { in: user.groupIds } },
+      select: { id: true, name: true, quotaWindow: true, quotaImages: true },
+    });
+    const policies = quotaPoliciesFromGroups(groups);
+    if (!policies.length) return;
+    const now = new Date();
+    const maxWindow = policies.reduce((max, policy) => Math.max(max, policy.windowSeconds), 0);
+    const events = await tx.quotaEvent.findMany({
+      where: { userId: user.id, createdAt: { gt: new Date(now.getTime() - maxWindow * 1000) } },
+      select: { createdAt: true, imageCount: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const result = evaluatePolicies(policies, events, imageCount, now);
+    if (!result.ok) throw this.exceeded('生成张数已达上限', result.retryAfterSeconds);
   }
 
   async acquireSse(userId: string) {

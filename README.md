@@ -8,8 +8,8 @@ KnewStudio is a self-hosted image-generation workspace for teams. It supports Op
 
 - OpenAI Images-compatible provider and model configuration
 - Text-to-image generation, reference-image editing, and masked inpainting
-- Conversations, generation history, asset library, thumbnails, and storage quotas
-- User approval, user groups, and model access control
+- Conversations, generation history, asset library, group-shared reference images, thumbnails, and storage quotas
+- User approval, user groups, model access control, and optional per-group generation quotas
 - Mandatory administrator MFA, TOTP, recovery codes, and session revocation
 - Encrypted storage for API keys and MFA secrets
 - SSRF protection for outbound requests, rate limiting, CSRF protection, and security headers
