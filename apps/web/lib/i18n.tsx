@@ -1,7 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 export type Locale = 'zh' | 'en';
-type TranslationParams = Record<string, string | number>;
 
 const english: Record<string, string> = {
   '页面不存在': 'Page not found',
@@ -60,9 +59,8 @@ const english: Record<string, string> = {
   '已不可用，请重新选择模型。': 'is unavailable. Select another model.',
   '参考图已恢复；局部重绘需要重新绘制遮罩。': 'The reference images were restored; inpainting requires a new mask.',
   '请切换到整图编辑或局部重绘': 'Switch to image edit or inpainting',
-  '将作为本次编辑的原图': 'Will be used as the source image',
+  '参考图最多支持 8 张': 'A maximum of 8 reference images is supported',
   '移除参考图': 'Remove reference image',
-  '更换原图（可选）': 'Replace source image (optional)',
   '原图': 'Source image',
   '选择模型': 'Select a model',
   '文生图': 'Text to image',
@@ -97,7 +95,6 @@ const english: Record<string, string> = {
   '放大查看图片': 'View image larger',
   '放大': 'Zoom',
   '设为参考图': 'Use as reference',
-  '已设为参考图': 'Reference selected',
   '已选为参考图': 'Selected as reference',
   '已在资产库中删除': 'Deleted from asset library',
   '资产库还是空的': 'Your asset library is empty',
@@ -388,11 +385,6 @@ const english: Record<string, string> = {
   '会话不存在': 'Conversation not found',
 };
 
-function interpolate(value: string, params?: TranslationParams) {
-  if (!params) return value;
-  return value.replace(/\{(\w+)\}/g, (_, key: string) => String(params[key] ?? `{${key}}`));
-}
-
 const LOCALE_COOKIE = 'knewstudio.locale';
 
 export function getCookieLocale(): Locale | null {
@@ -411,7 +403,7 @@ export function getInitialLocale(): Locale {
   return getCookieLocale() ?? (window.navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en');
 }
 
-type I18nContextValue = { locale: Locale; setLocale: (locale: Locale) => void; t: (key: string, params?: TranslationParams) => string };
+type I18nContextValue = { locale: Locale; setLocale: (locale: Locale) => void; t: (key: string) => string };
 const I18nContext = createContext<I18nContextValue | null>(null);
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
@@ -421,7 +413,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     setLocaleState(next);
     document.cookie = `${LOCALE_COOKIE}=${next}; Max-Age=31536000; Path=/; SameSite=Lax`;
   }, []);
-  const t = useCallback((key: string, params?: TranslationParams) => interpolate(locale === 'en' ? english[key] ?? key : key, params), [locale]);
+  const t = useCallback((key: string) => locale === 'en' ? english[key] ?? key : key, [locale]);
   const value = useMemo(() => ({ locale, setLocale, t }), [locale, setLocale, t]);
 
   useEffect(() => {

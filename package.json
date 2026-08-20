@@ -17,7 +17,8 @@
     "db:migrate": "npm run db:migrate -w @knewstudio/api",
     "assets:backfill-thumbnails": "npm run assets:backfill-thumbnails -w @knewstudio/api",
     "licenses:check": "node scripts/check-licenses.mjs",
-    "security-configs:check": "node scripts/check-security-configs.mjs"
+    "security-configs:check": "node scripts/check-security-configs.mjs",
+    "compose-security:check": "node scripts/run-compose-security.mjs"
   },
   "engines": { "node": ">=24 <25" },
   "overrides": {
