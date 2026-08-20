@@ -38,6 +38,13 @@ a { color: #67e8f9; }
 .prompt { min-height: 120px; resize: vertical; }
 .prompt-input-wrap { position: relative; display: grid; gap: 7px; }
 .prompt-history { position: relative; justify-self: end; }
+.prompt-input-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-wrap: wrap; }
+.prompt-polish-button { padding: 7px 11px; }
+.prompt-polish-preview { display: grid; gap: 10px; padding: 12px; border: 1px solid #0e7490; border-radius: 10px; background: #111318; }
+.prompt-polish-preview-block { display: grid; gap: 5px; }
+.prompt-polish-preview-block p { margin: 0; padding: 9px; border-radius: 7px; background: #20232b; color: #e5e7eb; white-space: pre-wrap; overflow-wrap: anywhere; }
+.prompt-polish-preview-label { color: #67e8f9; font-size: 12px; font-weight: 700; }
+.prompt-polish-preview-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .prompt-history-trigger { display: inline-flex; align-items: center; gap: 7px; padding: 6px 9px; border: 1px solid #343741; border-radius: 8px; background: #20232b; color: #d1d5db; font-size: 13px; }
 .prompt-history-trigger:hover, .prompt-history-trigger[aria-expanded="true"] { border-color: #0891b2; color: #67e8f9; }
 .prompt-history-popover { position: absolute; z-index: 70; right: 0; bottom: calc(100% + 8px); width: min(460px, calc(100vw - 32px)); max-height: min(440px, 58vh); display: grid; gap: 10px; padding: 12px; overflow: auto; border: 1px solid #343741; border-radius: 12px; background: #181a20; box-shadow: 0 20px 55px rgb(0 0 0 / 52%); }
@@ -222,6 +229,11 @@ a { color: #67e8f9; }
 .editing-panel { border-color: #0e7490; box-shadow: 0 0 0 1px rgb(8 145 178 / 18%); }
 .form-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .admin-panel form label .field { margin-top: 6px; }
+.prompt-polish-admin { width: min(900px, 100%); }
+.prompt-polish-system-prompt { min-height: 260px; resize: vertical; line-height: 1.55; }
+.prompt-polish-toggle { display: inline-flex; align-items: center; gap: 7px; }
+.prompt-polish-hint { margin: -5px 0 0; font-size: 13px; }
+.prompt-polish-actions { flex-wrap: wrap; }
 .registration-card { display: flex; justify-content: space-between; align-items: center; gap: 20px; }
 .registration-card p { margin: 5px 0 0; }
 .switch { position: relative; flex: 0 0 auto; }

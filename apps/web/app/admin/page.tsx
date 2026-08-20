@@ -3,11 +3,12 @@ import { useRouter } from '@/lib/router';
 import { api, json } from '@/lib/api';
 import { formatStorageBytes } from '@/lib/format-bytes';
 import SecuritySettings from '@/components/SecuritySettings';
+import PromptPolishSettings from '@/components/PromptPolishSettings';
 import { passwordRequirement } from '@/lib/password-policy';
 import type { CursorPage, SecurityUser } from '@/lib/studio-types';
 import { LanguageSwitcher, useI18n } from '@/lib/i18n';
 
-type AdminView = 'users' | 'groups' | 'providers' | 'models' | 'security';
+type AdminView = 'users' | 'groups' | 'providers' | 'models' | 'prompt-polish' | 'security';
 type Provider = { id: string; name: string; baseUrl: string; timeoutSeconds: number; enabled: boolean; testCooldownUntil: string | null; lastTestOk: boolean | null };
 type UserGroup = { id: string; name: string; description: string | null; _count: { users: number; models: number } };
 type AdminModel = { id: string; providerId: string; displayName: string; upstreamModelId: string; allowedSizes: string[]; allowedQualities: string[]; supportsEdit: boolean; supportsInpaint: boolean; maxImages: number; maxInputImages: number; enabled: boolean; provider: { id: string; name: string }; allowedGroups: Array<{ groupId: string; group: { id: string; name: string } }> };
@@ -318,13 +319,14 @@ export default function AdminPage() {
         <AdminNavButton active={view === 'groups'} onClick={() => setView('groups')} icon="◎">{t('用户组')}</AdminNavButton>
         <AdminNavButton active={view === 'providers'} onClick={() => setView('providers')} icon="◇">{t('添加供应商')}</AdminNavButton>
         <AdminNavButton active={view === 'models'} onClick={() => setView('models')} icon="▦">{t('添加模型')}</AdminNavButton>
+        <AdminNavButton active={view === 'prompt-polish'} onClick={() => setView('prompt-polish')} icon="✦">{t('提示词润色')}</AdminNavButton>
         <AdminNavButton active={view === 'security'} onClick={() => setView('security')} icon="◆">{t('安全')}</AdminNavButton>
       </nav>
       <button className="button admin-return" onClick={() => router.push('/')}>{t('返回工作台')}</button>
     </aside>
 
     <main className="main admin-main">
-      <header className="topbar admin-topbar"><div><h1>{view === 'users' ? t('用户管理') : view === 'groups' ? t('用户组') : view === 'providers' ? t('添加供应商') : view === 'models' ? t('添加模型') : t('安全')}</h1><p className="muted">{view === 'security' ? t('管理你的管理员账号安全选项。') : t('管理 KnewStudio 的访问权限与图片生成能力。')}</p></div><LanguageSwitcher /></header>
+      <header className="topbar admin-topbar"><div><h1>{view === 'users' ? t('用户管理') : view === 'groups' ? t('用户组') : view === 'providers' ? t('添加供应商') : view === 'models' ? t('添加模型') : view === 'prompt-polish' ? t('提示词润色') : t('安全')}</h1><p className="muted">{view === 'security' ? t('管理你的管理员账号安全选项。') : view === 'prompt-polish' ? t('配置用于文生图提示词润色的大语言模型。') : t('管理 KnewStudio 的访问权限与图片生成能力。')}</p></div><LanguageSwitcher /></header>
       {error && <p className="error admin-error">{error}</p>}
 
       {view === 'users' && <section className="admin-section stack">
@@ -380,6 +382,7 @@ export default function AdminPage() {
           <button className="button" onClick={() => beginModelEdit(item)}>{t('编辑')}</button><button className="button" onClick={() => void toggleModel(item)}>{item.enabled ? t('停用') : t('启用')}</button><button className="button danger" onClick={() => void deleteModel(item)}>{t('删除')}</button>
         </div></div>)}</section>
       </section>}
+      {view === 'prompt-polish' && <PromptPolishSettings onNotice={notify} onError={setError} />}
       {view === 'security' && currentUser && <SecuritySettings user={currentUser} />}
     </main>
   </div>;
