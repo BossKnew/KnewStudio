@@ -1,10 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { ACTIVE_JOB_STATUSES } from './domain-constants';
+import { ACTIVE_JOB_STATUSES, type TerminalJobStatus } from './domain-constants';
 import { GenerationEventsService } from './generation-events.service';
 import { PrismaService } from './prisma.service';
 import { QuotaService } from './quota.service';
-
-type TerminalStatus = 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
 
 @Injectable()
 export class GenerationLifecycleService {
@@ -23,7 +21,7 @@ export class GenerationLifecycleService {
     return Boolean(result.count);
   }
 
-  async finish(userId: string, jobId: string, status: TerminalStatus, failure?: { code: string; message: string }) {
+  async finish(userId: string, jobId: string, status: TerminalJobStatus, failure?: { code: string; message: string }) {
     const result = await this.prisma.generationJob.updateMany({
       where: { id: jobId, userId, status: { in: [...ACTIVE_JOB_STATUSES] } },
       data: {

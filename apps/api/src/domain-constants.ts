@@ -1,10 +1,10 @@
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 export const THUMBNAIL_MAX_EDGE = 512;
 export const THUMBNAIL_QUALITY = 82;
-export const MASK_CANVAS_MAX_EDGE = 2048;
 
 export const ACTIVE_JOB_STATUSES = ['QUEUED', 'RUNNING'] as const;
 export const TERMINAL_JOB_STATUSES = ['SUCCEEDED', 'FAILED', 'CANCELLED'] as const;
+export type TerminalJobStatus = (typeof TERMINAL_JOB_STATUSES)[number];
 
 export const GENERATION_QUEUE_OPTIONS = {
   attempts: 3,

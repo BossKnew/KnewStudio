@@ -40,6 +40,8 @@ jobs:
         run: npm run licenses:check
       - name: Check security configuration
         run: npm run security-configs:check
+      - name: Check Compose security invariants
+        run: npm run compose-security:check
       - name: Audit production dependencies
         run: npm audit --audit-level=high
 

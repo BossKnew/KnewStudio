@@ -15,7 +15,6 @@ const BLOCKED_RANGES = new Set([
 ]);
 
 const MAX_REDIRECTS = 3;
-export { MAX_IMAGE_BYTES } from './domain-constants';
 export const MAX_GENERATION_RESPONSE_BYTES = 120 * 1024 * 1024;
 export const MAX_ERROR_BYTES = 64 * 1024;
 
