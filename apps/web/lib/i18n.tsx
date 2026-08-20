@@ -291,6 +291,7 @@ const english: Record<string, string> = {
   '请先保存提示词润色配置': 'Save the prompt polishing configuration first',
   '供应商连接失败、响应过大或请求超时': 'The provider connection failed, the response was too large, or the request timed out.',
   '供应商拒绝了提示词润色请求，请检查模型 ID 和请求格式': 'The provider rejected the prompt polishing request. Check the model ID and request format.',
+  '供应商拒绝了图片请求（错误代码：text_conversation_not_supported）。该模型不接受普通对话，请管理员确认网关中的模型类型为绘图/image，并检查模型 ID、原图、遮罩、尺寸、质量和生成数量': 'The provider rejected the image request (error code: text_conversation_not_supported). This model does not accept a plain text conversation. The administrator should set the gateway model type to image generation and check the model ID, source image, mask, size, quality, and image count.',
   '大语言模型供应商认证失败，请检查 API Key': 'Language model provider authentication failed. Check the API key.',
   '大语言模型接口或模型不存在，请检查 Base URL 和模型 ID': 'The language model endpoint or model does not exist. Check the base URL and model ID.',
   '大语言模型供应商限流或账户额度不足': 'The language model provider is rate-limiting requests or the account has insufficient credits.',

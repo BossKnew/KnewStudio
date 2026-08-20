@@ -2,6 +2,8 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job, UnrecoverableError } from 'bullmq';
 import { createReadStream, createWriteStream, openAsBlob } from 'node:fs';
+import { open, readFile } from 'node:fs/promises';
+import { createInterface } from 'node:readline';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { finished } from 'node:stream/promises';
@@ -30,7 +32,7 @@ async function streamJsonParser() {
 
 export function normalizeImageQuality(modelId: string, quality: unknown) {
   const value = typeof quality === 'string' ? quality : 'auto';
-  return /^gpt-image-/i.test(modelId) && value === 'standard' ? 'auto' : value;
+  return /(^|\/)gpt-image-/i.test(modelId) && value === 'standard' ? 'auto' : value;
 }
 
 export function providerImageParameters(modelId: string, prompt: string, parameters: { size: unknown; quality: unknown; count: unknown }) {
@@ -40,6 +42,23 @@ export function providerImageParameters(modelId: string, prompt: string, paramet
     size: parameters.size,
     quality: normalizeImageQuality(modelId, parameters.quality),
     n: parameters.count,
+  };
+}
+
+export function providerEditImageField(count: number) {
+  return count > 1 ? 'image[]' : 'image';
+}
+
+export function chatImageCompletionBody(modelId: string, prompt: string, imageDataUrls: string[] = []) {
+  return {
+    model: modelId,
+    stream: true,
+    messages: [{
+      role: 'user',
+      content: imageDataUrls.length
+        ? [{ type: 'text', text: prompt }, ...imageDataUrls.map((url) => ({ type: 'image_url', image_url: { url } }))]
+        : prompt,
+    }],
   };
 }
 
@@ -61,6 +80,9 @@ export function providerErrorCode(body?: Buffer) {
 export function providerHttpFailure(status: number, body?: Buffer) {
   const providerCode = providerErrorCode(body);
   if (providerCode === 'moderation_blocked') return { code: 'PROVIDER_MODERATION', message: '请求或生成结果被供应商安全检查拒绝，请调整提示词或参考图后重试' };
+  if (providerCode === 'text_conversation_not_supported') {
+    return { code: 'PROVIDER_PARAMETERS', message: '供应商拒绝了图片请求（错误代码：text_conversation_not_supported）。该模型不接受普通对话，请管理员确认网关中的模型类型为绘图/image，并检查模型 ID、原图、遮罩、尺寸、质量和生成数量' };
+  }
   if (status === 400 || status === 422) {
     const detail = providerCode ? `（错误代码：${providerCode}）` : '';
     return { code: 'PROVIDER_PARAMETERS', message: `供应商拒绝了图片或模型参数${detail}，请管理员检查模型能力、原图、遮罩、尺寸、质量和生成数量` };
@@ -76,6 +98,132 @@ function providerProtocolError(message: string) {
   error.noRetry = true;
   error.providerFailure = { code: 'PROVIDER_RESPONSE', message: '供应商响应格式无效，请管理员检查 Base URL 是否包含正确的 /v1' };
   return error;
+}
+
+function addChatImageRef(value: string, refs: string[], seen: Set<string>) {
+  const trimmed = value.trim();
+  if (!trimmed || seen.has(trimmed) || refs.length >= 8) return;
+  if (trimmed.startsWith('data:image/')) {
+    seen.add(trimmed);
+    refs.push(trimmed);
+    return;
+  }
+  if (/^https?:\/\//i.test(trimmed) && trimmed.length <= 2048) {
+    seen.add(trimmed);
+    refs.push(trimmed);
+  }
+}
+
+function extractChatImageRefsFromText(text: string, refs: string[], seen: Set<string>) {
+  const markdown = /!\[[^\]]{0,256}]\((data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+|https?:\/\/[^)\s]{1,2048})\)/gi;
+  for (const match of text.matchAll(markdown)) addChatImageRef(match[1], refs, seen);
+  const dataUrls = /data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+/gi;
+  for (const match of text.matchAll(dataUrls)) addChatImageRef(match[0], refs, seen);
+}
+
+export function extractChatImageRefs(payload: unknown, extraText = ''): string[] {
+  const refs: string[] = [];
+  const seen = new Set<string>();
+  const visit = (value: unknown, depth: number) => {
+    if (depth > 10 || refs.length >= 8) return;
+    if (typeof value === 'string') {
+      extractChatImageRefsFromText(value, refs, seen);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1);
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.b64_json === 'string') addChatImageRef(`data:image/png;base64,${obj.b64_json.replace(/\s/g, '')}`, refs, seen);
+    if (typeof obj.url === 'string') addChatImageRef(obj.url, refs, seen);
+    if (typeof obj.image_url === 'string') addChatImageRef(obj.image_url, refs, seen);
+    for (const nested of [obj.image_url, obj.message, obj.delta, obj.content, obj.images, obj.data, obj.choices, obj.output]) {
+      if (nested !== undefined) visit(nested, depth + 1);
+    }
+  };
+  visit(payload, 0);
+  extractChatImageRefsFromText(extraText, refs, seen);
+  return refs;
+}
+
+async function materializeChatImageRef(ref: string, storage: StorageService): Promise<ProviderImageSource> {
+  if (/^https?:\/\//i.test(ref)) {
+    if (ref.length > 2048) throw providerProtocolError('供应商图片地址过长');
+    return { url: ref };
+  }
+  const match = /^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z0-9+/=\s]+)$/i.exec(ref);
+  if (!match) throw providerProtocolError('供应商返回了无效的内嵌图片');
+  const encoded = match[2].replace(/\s/g, '');
+  const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0;
+  if ((encoded.length * 3) / 4 - padding > MAX_IMAGE_BYTES) throw providerProtocolError('供应商图片超过大小限制');
+  const bytes = Buffer.from(encoded, 'base64');
+  if (!bytes.length) throw providerProtocolError('供应商返回了空的 Base64 图片');
+  if (bytes.length > MAX_IMAGE_BYTES) throw providerProtocolError('供应商图片超过大小限制');
+  const path = await storage.createStagingPath('.image');
+  const writer = createWriteStream(path, { flags: 'wx' });
+  try {
+    if (!writer.write(bytes)) await once(writer, 'drain');
+    writer.end();
+    await finished(writer);
+    return { path };
+  } catch (error) {
+    writer.destroy();
+    await storage.deleteStaged(path).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function peekFileText(path: string, length = 64) {
+  const handle = await open(path, 'r');
+  try {
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, 0);
+    return buffer.toString('utf8', 0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function parseChatCompletionImages(jsonPath: string, count: number, storage: StorageService): Promise<ProviderImageSource[]> {
+  const peek = (await peekFileText(jsonPath)).trimStart();
+  const refs: string[] = [];
+  const seen = new Set<string>();
+  if (peek.startsWith('data:') || peek.startsWith('event:')) {
+    const lines = createInterface({ input: createReadStream(jsonPath, { encoding: 'utf8' }), crlfDelay: Infinity });
+    try {
+      for await (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (!data || data === '[DONE]') continue;
+        try { extractChatImageRefs(JSON.parse(data)).forEach((ref) => addChatImageRef(ref, refs, seen)); }
+        catch { extractChatImageRefsFromText(data, refs, seen); }
+        if (refs.length >= count) break;
+      }
+    } finally {
+      lines.close();
+    }
+  } else {
+    const body = await readFile(jsonPath, 'utf8');
+    try { extractChatImageRefs(JSON.parse(body)).forEach((ref) => addChatImageRef(ref, refs, seen)); }
+    catch { extractChatImageRefsFromText(body, refs, seen); }
+  }
+  const selected = refs.slice(0, Math.max(1, count));
+  if (!selected.length) throw providerProtocolError('供应商未返回图片数据');
+  const staged: string[] = [];
+  try {
+    const images = [];
+    for (const ref of selected) {
+      const image = await materializeChatImageRef(ref, storage);
+      if (image.path) staged.push(image.path);
+      images.push(image);
+    }
+    staged.length = 0;
+    return images;
+  } finally {
+    await Promise.all(staged.map((path) => storage.deleteStaged(path).catch(() => undefined)));
+  }
 }
 
 export async function parseProviderImages(jsonPath: string, count: number, storage: StorageService): Promise<ProviderImageSource[]> {
@@ -274,11 +422,13 @@ export class GenerationProcessor extends WorkerHost {
       } else {
         const form = new UndiciFormData();
         for (const [key, value] of Object.entries(requestParameters)) form.set(key, String(value));
+        const sourceIds = Array.isArray(params.sourceAssetIds) ? params.sourceAssetIds : [];
+        const imageField = providerEditImageField(sourceIds.length);
         let firstSource: Awaited<ReturnType<GenerationProcessor['ownedAsset']>> | undefined;
-        for (const assetId of Array.isArray(params.sourceAssetIds) ? params.sourceAssetIds : []) {
+        for (const assetId of sourceIds) {
           const asset = await this.ownedAsset(job.userId, assetId);
           firstSource ??= asset;
-          form.append('image[]', await openAsBlob(this.storage.filePath(asset.objectKey), { type: asset.mimeType }), asset.originalName ?? 'image.png');
+          form.append(imageField, await openAsBlob(this.storage.filePath(asset.objectKey), { type: asset.mimeType }), asset.originalName ?? 'image.png');
         }
         if (params.maskAssetId) {
           const mask = await this.ownedAsset(job.userId, params.maskAssetId);
@@ -294,8 +444,9 @@ export class GenerationProcessor extends WorkerHost {
         body = form;
       }
 
-      const responsePath = await this.storage.createStagingPath('.json');
+      let responsePath = await this.storage.createStagingPath('.json');
       let response;
+      let usedChatFallback = false;
       try {
         try {
           response = await this.http.requestToFile(`${job.model.provider.baseUrl}/${endpoint}`, { method: 'POST', headers, body: body as any, redirectPolicy: 'same-origin', signal: AbortSignal.timeout(job.model.provider.timeoutSeconds * 1000) }, responsePath, MAX_GENERATION_RESPONSE_BYTES, MAX_ERROR_BYTES);
@@ -308,6 +459,14 @@ export class GenerationProcessor extends WorkerHost {
         await Promise.all(requestStaged.map((path) => this.storage.deleteStaged(path).catch(() => undefined)));
       }
       try {
+        if (!response.ok && providerErrorCode(response.body) === 'text_conversation_not_supported') {
+          const fallback = await this.tryChatImageFallback({ id: job.id, userId: job.userId, prompt: job.prompt, model: job.model }, params, headers, responsePath);
+          if (fallback) {
+            responsePath = fallback.responsePath;
+            response = fallback.response;
+            usedChatFallback = true;
+          }
+        }
         if (!response.ok) {
           const fingerprint = providerErrorFingerprint(response.body);
           const providerCode = providerErrorCode(response.body);
@@ -318,8 +477,12 @@ export class GenerationProcessor extends WorkerHost {
           throw error;
         }
         const contentType = response.headers.get('content-type') ?? '';
-        if (!contentType.includes('application/json') || !response.filePath) throw providerProtocolError(`供应商返回类型无效：${contentType || 'missing'}`);
-        const sources = await parseProviderImages(response.filePath, params.count, this.storage);
+        if (!response.filePath) throw providerProtocolError(`供应商返回类型无效：${contentType || 'missing'}`);
+        if (!usedChatFallback && !contentType.includes('application/json')) throw providerProtocolError(`供应商返回类型无效：${contentType || 'missing'}`);
+        if (usedChatFallback && contentType && !/json|event-stream|text\/plain/i.test(contentType)) throw providerProtocolError(`供应商返回类型无效：${contentType}`);
+        const sources = usedChatFallback
+          ? await parseChatCompletionImages(response.filePath, params.count, this.storage)
+          : await parseProviderImages(response.filePath, params.count, this.storage);
         try {
           const [freshUser, freshJob] = await Promise.all([
             this.prisma.user.findUnique({ where: { id: job.userId }, select: { status: true } }),
@@ -353,6 +516,59 @@ export class GenerationProcessor extends WorkerHost {
       if (error?.noRetry) throw new UnrecoverableError(safeErrorMessage(error));
       throw error;
     }
+  }
+
+  private async tryChatImageFallback(
+    job: { id: string; userId: string; prompt: string; model: { upstreamModelId: string; provider: { baseUrl: string; timeoutSeconds: number } } },
+    params: { sourceAssetIds?: unknown; maskAssetId?: unknown; count?: unknown },
+    headers: Record<string, string>,
+    failedPath: string,
+  ) {
+    const chatPath = await this.storage.createStagingPath('.chat');
+    try {
+      const imageDataUrls: string[] = [];
+      for (const assetId of Array.isArray(params.sourceAssetIds) ? params.sourceAssetIds : []) {
+        if (typeof assetId !== 'string') continue;
+        const asset = await this.ownedAsset(job.userId, assetId);
+        imageDataUrls.push(await this.fileToDataUrl(this.storage.filePath(asset.objectKey), asset.mimeType));
+      }
+      if (typeof params.maskAssetId === 'string') {
+        const mask = await this.ownedAsset(job.userId, params.maskAssetId);
+        imageDataUrls.push(await this.fileToDataUrl(this.storage.filePath(mask.objectKey), mask.mimeType));
+      }
+      const chatHeaders = { ...headers, 'Content-Type': 'application/json' };
+      const response = await this.http.requestToFile(
+        `${job.model.provider.baseUrl}/chat/completions`,
+        {
+          method: 'POST',
+          headers: chatHeaders,
+          body: JSON.stringify(chatImageCompletionBody(job.model.upstreamModelId, job.prompt, imageDataUrls)),
+          redirectPolicy: 'same-origin',
+          signal: AbortSignal.timeout(job.model.provider.timeoutSeconds * 1000),
+        },
+        chatPath,
+        MAX_GENERATION_RESPONSE_BYTES,
+        MAX_ERROR_BYTES,
+      );
+      if (!response.ok) {
+        await this.storage.deleteStaged(chatPath).catch(() => undefined);
+        return undefined;
+      }
+      await this.storage.deleteStaged(failedPath).catch(() => undefined);
+      this.logger.warn(`任务 ${job.id} 的 Images 接口返回 text_conversation_not_supported，已改走 Chat Completions`);
+      return { response, responsePath: chatPath };
+    } catch (error) {
+      await this.storage.deleteStaged(chatPath).catch(() => undefined);
+      this.logger.warn(`任务 ${job.id} 的 Chat Completions 回退失败：${safeErrorMessage(error)}`);
+      return undefined;
+    }
+  }
+
+  private async fileToDataUrl(path: string, mimeType: string) {
+    const bytes = await readFile(path);
+    if (bytes.length > MAX_IMAGE_BYTES) throw new Error('参考图超过大小限制');
+    const mime = mimeType === 'image/jpeg' || mimeType === 'image/png' || mimeType === 'image/webp' ? mimeType : 'image/png';
+    return `data:${mime};base64,${bytes.toString('base64')}`;
   }
 
   private async persistSource(userId: string, jobId: string, source: ProviderImageSource) {
