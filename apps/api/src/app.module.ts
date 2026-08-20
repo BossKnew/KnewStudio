@@ -29,12 +29,14 @@ import { GenerationEventsService } from './generation-events.service';
 import { GenerationLifecycleService } from './generation-lifecycle.service';
 import { AssetLifecycleService } from './asset-lifecycle.service';
 import { PromptsController } from './prompts.controller';
+import { PromptPolishAdminController, PromptPolishController } from './prompt-polish.controller';
+import { PromptPolishService } from './prompt-polish.service';
 
-const sharedProviders = [PrismaService, RedisService, RateLimitService, QuotaService, CryptoService, MfaCryptoService, MfaService, StorageService, AssetLifecycleService, SafeHttpService, AuthContextService, GenerationEventsService, GenerationLifecycleService, AuthService];
+const sharedProviders = [PrismaService, RedisService, RateLimitService, QuotaService, CryptoService, MfaCryptoService, MfaService, StorageService, AssetLifecycleService, SafeHttpService, AuthContextService, GenerationEventsService, GenerationLifecycleService, AuthService, PromptPolishService];
 
 @Module({
   imports: [BullModule.forRoot({ connection: parseRedisUrl() }), BullModule.registerQueue({ name: 'image-generation' })],
-  controllers: [HealthController, AuthController, AdminController, ProvidersController, ModelsController, AssetsController, ConversationsController, GenerationsController, PromptsController],
+  controllers: [HealthController, AuthController, AdminController, ProvidersController, ModelsController, AssetsController, ConversationsController, GenerationsController, PromptsController, PromptPolishAdminController, PromptPolishController],
   providers: [...sharedProviders, GenerationProcessor, UploadAdmissionInterceptor, { provide: APP_GUARD, useClass: SessionGuard }],
 })
 export class AppModule {}

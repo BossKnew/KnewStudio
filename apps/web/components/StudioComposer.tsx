@@ -27,6 +27,8 @@ export default function StudioComposer({ models, conversationId, references, onR
   const [sourceInputKey, setSourceInputKey] = useState(0);
   const [maskFile, setMaskFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const [polishBusy, setPolishBusy] = useState(false);
+  const [polishPreview, setPolishPreview] = useState<{ sourcePrompt: string; polishedPrompt: string } | null>(null);
   const [error, setError] = useState('');
   const model = useMemo(() => models.find((item) => item.id === modelId), [models, modelId]);
   const hasSource = references.length > 0;
@@ -77,6 +79,7 @@ export default function StudioComposer({ models, conversationId, references, onR
 
   function resetComposer() {
     setPrompt('');
+    setPolishPreview(null);
     setMode('TEXT_TO_IMAGE');
     onReferencesChange([]);
     setMaskFile(null);
@@ -87,6 +90,36 @@ export default function StudioComposer({ models, conversationId, references, onR
       setQuality(model.defaults.quality ?? model.allowedQualities[0]);
       setCount(model.defaults.count ?? 1);
     }
+  }
+
+  async function polishPrompt() {
+    const sourcePrompt = prompt.trim();
+    if (!sourcePrompt) {
+      setError(t('提示词不能为空'));
+      return;
+    }
+    setPolishBusy(true);
+    setError('');
+    try {
+      const result = await api<{ polishedPrompt: string }>('/prompt-polish', json('POST', { prompt: sourcePrompt, mode: 'TEXT_TO_IMAGE' }));
+      setPolishPreview({ sourcePrompt, polishedPrompt: result.polishedPrompt });
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setPolishBusy(false);
+    }
+  }
+
+  function applyPolishedPrompt() {
+    if (!polishPreview) return;
+    if (prompt.trim() !== polishPreview.sourcePrompt) {
+      setError(t('提示词在预览期间已发生变化，请重新润色'));
+      setPolishPreview(null);
+      return;
+    }
+    setPrompt(polishPreview.polishedPrompt);
+    setPolishPreview(null);
+    setError('');
   }
 
   async function upload(file: File, role: 'UPLOAD' | 'MASK' = 'UPLOAD') {
@@ -164,8 +197,16 @@ export default function StudioComposer({ models, conversationId, references, onR
     <h1>{t('想创作什么？')}</h1>
     <div className="prompt-input-wrap">
       <textarea className="field prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={t('输入图片描述或编辑要求')} required />
-      <PromptHistory onPick={setPrompt} />
+      <div className="prompt-input-actions">
+        <PromptHistory onPick={(value) => { setPrompt(value); setPolishPreview(null); }} />
+        {mode === 'TEXT_TO_IMAGE' && <button className="button prompt-polish-button" type="button" disabled={polishBusy || busy} onClick={() => void polishPrompt()}>{polishBusy ? t('正在润色…') : t('提示词润色')}</button>}
+      </div>
     </div>
+    {polishPreview && <section className="prompt-polish-preview" aria-live="polite">
+      <div className="prompt-polish-preview-block"><span className="prompt-polish-preview-label">{t('原提示词')}</span><p>{polishPreview.sourcePrompt}</p></div>
+      <div className="prompt-polish-preview-block"><span className="prompt-polish-preview-label">{t('润色结果')}</span><p>{polishPreview.polishedPrompt}</p></div>
+      <div className="prompt-polish-preview-actions"><button className="button primary" type="button" onClick={applyPolishedPrompt}>{t('应用润色')}</button><button className="button" type="button" onClick={() => setPolishPreview(null)}>{t('取消润色')}</button></div>
+    </section>}
     {hasSource && <div className="source-selection-list" aria-label={t('参考图列表')}>
       {references.map((reference, index) => <div className="source-selection" key={reference.key}>
         {reference.kind === 'asset' ? <img src={reference.asset.thumbnailUrl ?? reference.asset.contentUrl} alt={t('已选参考图')} /> : <div className="source-file-icon" aria-hidden="true">▧</div>}
@@ -180,7 +221,7 @@ export default function StudioComposer({ models, conversationId, references, onR
     {mode === 'INPAINT' && maskSource && <MaskCanvas imageSource={maskSource} onMask={setMaskFile} />}
     <div className="composer-controls">
       <select className="field compact-field" value={modelId} onChange={(event) => { const found = models.find((item) => item.id === event.target.value); if (found) chooseModel(found); }} required><option value="">{t('选择模型')}</option>{models.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select>
-      <select className="field compact-field" value={mode} onChange={(event) => { setMode(event.target.value as GenerationMode); setError(''); }}><option value="TEXT_TO_IMAGE">{t('文生图')}</option>{model?.supportsEdit && <option value="IMAGE_EDIT">{t('整图编辑')}</option>}{model?.supportsInpaint && <option value="INPAINT">{t('局部重绘')}</option>}</select>
+      <select className="field compact-field" value={mode} onChange={(event) => { const nextMode = event.target.value as GenerationMode; setMode(nextMode); if (nextMode !== 'TEXT_TO_IMAGE') setPolishPreview(null); setError(''); }}><option value="TEXT_TO_IMAGE">{t('文生图')}</option>{model?.supportsEdit && <option value="IMAGE_EDIT">{t('整图编辑')}</option>}{model?.supportsInpaint && <option value="INPAINT">{t('局部重绘')}</option>}</select>
       <GenerationSettings
         sizes={model?.allowedSizes ?? []}
         qualities={model?.allowedQualities ?? []}
