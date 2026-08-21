@@ -4,66 +4,30 @@ All notable changes to KnewStudio are documented here.
 
 ## [0.1.3] - 2026-08-20
 
-### Added
+- Share assets with user groups; members can preview, download, and use them as edit or inpaint references.
+- Shared files stay with the owner. Recipients do not get a copy or extra storage quota. Prompts and notes stay private.
+- Per-group sliding-window generation quotas (for example 5 images / 5h). Retries count. Empty settings mean no limit.
+- Sidebar usage for storage and remaining group allowances; admin usage query by UTC date range.
+- Conversation titles: first 10 characters for Chinese prompts, first 4 words for English prompts.
+- Prompt polishing asks for confirmation before calling the model and before replacing the prompt.
+- Admin-configurable Chinese and English labels for size and quality values.
 
-- 资产库新增「组内素材」，用户可将自己的上传图或生成结果分享到所属用户组。
-- 组成员可以预览、下载分享图片，并在整图编辑 / 局部重绘中作为参考图；文件仍由分享者持有，不复制、不占用对方配额。
-- 分享图片不暴露备注和原生成提示词。作者或管理员可以取消分享。
-- 管理后台用户组列表显示分享条数。
-- 用户组可配置滑动窗口生成额度（例如 5 小时内 5 张），按张计数、组内每人独立；重试再次扣减。
-- 工作台侧边栏显示存储用量和各组剩余张数；管理后台增加用量查询。
-- 新建会话标题：中文提示词取前 10 个字，英文提示词取前 4 个词。
-- 提示词润色在调用模型和替换原文前都需要确认。
-- 管理后台可配置尺寸/质量的中英文显示文案；未填写时工作台仍显示模型原始取值。
+## [0.1.2] - 2026-08-20
 
-### Backend
-
-- 新增 `AssetShare` 模型及迁移，按用户组授予对 `UPLOAD` / `OUTPUT` 资产的实时读权限。
-- 素材 content、生成参考图、复用、重试和 Worker 统一走同一套授权；遮罩仍仅作者可用。
-- 已分享的上传原图不会随会话删除。
-- 新增 `QuotaEvent` 账本与 `GenerationJob.imageCount`；生成提交和重试在入队前按所属组策略强制限额。
-
-### Validation
-
-- API 41 个测试套件、216 个测试通过。
-- Web 13 个测试通过。
-- TypeScript lint 通过。
-
-### Migration
-
-部署 `v0.1.3` 前请执行：
-
-```bash
-npm run db:migrate
-```
+- AI prompt polishing for text-to-image, with preview and confirmation before apply.
+- Admin settings for the polishing LLM (provider, model, endpoint, encrypted API key, timeout, system prompt, connection test).
+- Polishing requests are rate-limited, timed out, and fail without replacing the original prompt.
 
 ## [0.1.1] - 2026-08-19
 
-### Added
+- Multi-reference editing and inpainting, mixing local files with history and asset-library images.
+- Persistent prompt history and favorites.
+- Regenerate restores prompt, model, size, quality, count, and references; inpainting requires a new mask.
+- Download all images from a conversation, or selected images from the current asset-library page.
 
-- 支持整图编辑和局部重绘的多参考图工作流，允许按顺序混合选择本地图片、历史任务图片和资产库图片。
-- 新增服务端持久化的 Prompt 历史与收藏，支持历史/收藏分页浏览、收藏切换和用户隔离。
-- 历史任务新增“再次生成”，可恢复 Prompt、模型、尺寸、质量、数量和参考图；局部重绘会提示重新绘制遮罩，且不会自动提交任务。
-- 支持下载当前会话的全部生成图片，以及资产库当前可见页的多选逐张下载、进度反馈和失败提示。
-- 管理后台支持配置模型单次最大参考图数量。
+## [0.1.0] - 2026-08-18
 
-### Backend
-
-- 新增 `PromptEntry` Prisma 模型及迁移，自动合并相同 Prompt 并记录使用次数、收藏状态和最近使用时间。
-- 新增 Prompt 查询/收藏、生成参数复用和会话输出资产接口。
-- 增加参考图去重、数量、模式和模型能力校验，并兼容缺少旧版参考图参数的 Worker 任务。
-- 会话输出资产接口仅返回当前用户未删除的生成结果，并生成安全下载文件名。
-
-### Validation
-
-- API 33 个测试套件、170 个测试通过。
-- Web 12 个测试通过。
-- TypeScript lint、API/Web build 和 Prisma Client 生成通过。
-
-### Migration
-
-部署 `v0.1.1` 前请执行：
-
-```bash
-npm run db:migrate
-```
+- First release: self-hosted image generation with OpenAI Images-compatible providers.
+- Text-to-image, reference-image editing, masked inpainting, conversations, and an asset library.
+- User approval, groups, model access control, administrator MFA, and encrypted provider keys.
+- Chinese and English UI. Video generation is reserved in the codebase but not exposed.
