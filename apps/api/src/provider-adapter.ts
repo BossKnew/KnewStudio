@@ -80,6 +80,75 @@ export function providerTimeoutError() {
   return error;
 }
 
+export function providerHttpTimeoutError() {
+  const error: any = new Error('供应商请求超时');
+  error.noRetry = true;
+  error.providerFailure = { code: 'PROVIDER_TIMEOUT', message: '供应商请求超时，请稍后重试或让管理员提高生成超时和任务等待超时' };
+  return error;
+}
+
+export function isAbortTimeoutError(error: unknown) {
+  for (let current: unknown = error, depth = 0; current && depth < 4; depth += 1) {
+    if (typeof current !== 'object') return false;
+    const err = current as { name?: string; code?: string; message?: string; cause?: unknown };
+    if (err.name === 'TimeoutError') return true;
+    if (err.code === 'UND_ERR_HEADERS_TIMEOUT' || err.code === 'UND_ERR_BODY_TIMEOUT') return true;
+    if (typeof err.message === 'string' && /aborted due to timeout|headers timeout|body timeout/i.test(err.message)) return true;
+    current = err.cause;
+  }
+  return false;
+}
+
+export function isProviderConnectionError(error: unknown) {
+  for (let current: unknown = error, depth = 0; current && depth < 4; depth += 1) {
+    if (typeof current !== 'object') return false;
+    const err = current as { providerConnection?: boolean; code?: string; message?: string; cause?: unknown };
+    if (err.providerConnection) return true;
+    if (err.code === 'UND_ERR_CONNECT_TIMEOUT' || err.code === 'UND_ERR_SOCKET' || err.code === 'ETIMEDOUT' || err.code === 'ECONNRESET' || err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND' || err.code === 'EAI_AGAIN' || err.code === 'EHOSTUNREACH' || err.code === 'ENETUNREACH') return true;
+    if (typeof err.message === 'string' && /connect timeout|fetch failed|disconnected before secure TLS/i.test(err.message)) return true;
+    current = err.cause;
+  }
+  return false;
+}
+
+export function connectionFailureDetail(error: unknown) {
+  for (let current: unknown = error, depth = 0; current && depth < 6; depth += 1) {
+    if (!current || typeof current !== 'object') return undefined;
+    const err = current as { code?: string; message?: string; cause?: unknown };
+    if (err.code === 'ECONNRESET' || /disconnected before secure TLS/i.test(err.message ?? '')) return 'TLS 握手被重置';
+    if (err.code === 'UND_ERR_CONNECT_TIMEOUT' || err.code === 'ETIMEDOUT') return '连接超时';
+    if (err.code === 'ECONNREFUSED') return '连接被拒绝';
+    if (err.code === 'ENOTFOUND' || err.code === 'EAI_AGAIN') return '域名无法解析';
+    if (err.code === 'CERT_HAS_EXPIRED' || err.code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' || /certificate/i.test(err.message ?? '')) return '证书校验失败';
+    current = err.cause;
+  }
+  return undefined;
+}
+
+export function providerConnectionError(cause?: unknown) {
+  const detail = connectionFailureDetail(cause);
+  const error: any = new Error('无法连接供应商');
+  error.providerConnection = true;
+  error.cause = cause;
+  error.providerFailure = {
+    code: 'PROVIDER_CONNECTION',
+    message: detail
+      ? `无法连接供应商（${detail}）。请管理员检查 Base URL、出站网络和 DNS`
+      : '无法连接供应商，请管理员检查 Base URL、出站网络和 DNS',
+  };
+  return error;
+}
+
+export function mapAbortTimeoutError(error: unknown) {
+  return isAbortTimeoutError(error) ? providerHttpTimeoutError() : error;
+}
+
+export function mapProviderRequestError(error: unknown) {
+  if (isAbortTimeoutError(error)) return providerHttpTimeoutError();
+  if (isProviderConnectionError(error)) return providerConnectionError(error);
+  return error;
+}
+
 export function sleep(ms: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     if (signal?.aborted) {

@@ -14,7 +14,7 @@ import { providerRequestHeaders } from './provider-credentials';
 import { GenerationLifecycleService } from './generation-lifecycle.service';
 import { accessibleSourceWhere } from './asset-access';
 import { createVideoAdapter } from './video-adapters';
-import type { GeneratedMedia, MediaGenerationRequest } from './provider-adapter';
+import { mapProviderRequestError, type GeneratedMedia, type MediaGenerationRequest } from './provider-adapter';
 import type { AuthUser } from './common';
 
 @Processor('video-generation', {
@@ -64,6 +64,7 @@ export class VideoGenerationProcessor extends WorkerHost {
     }
     try {
       const params = (job.parameters && typeof job.parameters === 'object' && !Array.isArray(job.parameters) ? job.parameters : {}) as Record<string, unknown>;
+      this.logger.log(`视频任务 ${job.id} 开始：生成超时 ${job.model.provider.timeoutSeconds}s，任务等待 ${job.model.provider.pollTimeoutSeconds}s`);
       const adapter = createVideoAdapter(job.model.provider.adapterKind, {
         http: this.http,
         headers: providerRequestHeaders(this.crypto, job.model.provider),
@@ -95,9 +96,11 @@ export class VideoGenerationProcessor extends WorkerHost {
       }
       const completed = await this.lifecycle.finish(job.userId, job.id, 'SUCCEEDED');
       if (!completed) await this.assets.removeJobOutputs(job.userId, job.id);
-    } catch (error: any) {
+    } catch (caught: any) {
+      const error: any = mapProviderRequestError(caught);
       const finalAttempt = error?.noRetry || queueJob.attemptsMade + 1 >= (queueJob.opts.attempts ?? 1);
-      this.logger.warn(`视频任务 ${job.id} 失败：${safeErrorMessage(error)}`);
+      const cause = caught?.cause ?? caught;
+      this.logger.warn(`视频任务 ${job.id} 失败：${safeErrorMessage(error)} code=${cause?.code ?? caught?.code ?? 'n/a'} cause=${safeErrorMessage(cause)}（生成超时 ${job.model.provider.timeoutSeconds}s，任务等待 ${job.model.provider.pollTimeoutSeconds}s）`);
       if (finalAttempt) {
         const failure = error?.providerFailure ?? (error?.providerConnection ? { code: 'PROVIDER_CONNECTION', message: '无法连接供应商、响应过大或请求超时，请管理员检查网络、超时和响应限制' } : { code: 'GENERATION_FAILED', message: videoFailureMessage(error) });
         await this.lifecycle.finish(job.userId, job.id, 'FAILED', failure);
@@ -165,5 +168,6 @@ function videoFailureMessage(error: unknown) {
   if (/ffprobe|ffmpeg|无法解析视频/i.test(message)) return '视频已从供应商返回，但本机无法解析视频文件。请安装 ffmpeg 后重试，或使用 Docker 部署';
   if (/MP4|空的视频/i.test(message)) return message;
   if (/远端目标|必须使用 HTTPS/i.test(message)) return '无法下载生成结果：供应商视频地址被安全策略拦截，请检查出站网络';
+  if (/aborted due to timeout|TimeoutError|请求超时/i.test(message)) return '供应商请求超时，请稍后重试或让管理员提高生成超时和任务等待超时';
   return `视频生成失败：${message}`;
 }

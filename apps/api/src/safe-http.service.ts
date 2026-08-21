@@ -7,6 +7,7 @@ import { createWriteStream } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { safeErrorMessage } from './common';
 
 const BLOCKED_RANGES = new Set([
   'unspecified', 'broadcast', 'multicast', 'linkLocal', 'loopback', 'private',
@@ -17,16 +18,31 @@ const BLOCKED_RANGES = new Set([
 const MAX_REDIRECTS = 3;
 export const MAX_GENERATION_RESPONSE_BYTES = 120 * 1024 * 1024;
 export const MAX_ERROR_BYTES = 64 * 1024;
+export const CONNECT_TIMEOUT_MS = 30_000;
 
-type Address = { address: string; family: 4 | 6 };
+export type Address = { address: string; family: 4 | 6 };
 
-export function pinnedLookup(selected: Address) {
+export function preferRoutableAddress(addresses: Address[]) {
+  return [...addresses.filter((item) => item.family === 4), ...addresses.filter((item) => item.family === 6)];
+}
+
+export function tlsServername(hostname: string) {
+  const host = hostname.replace(/^\[|\]$/g, '');
+  return isIP(host) ? undefined : host;
+}
+
+export function pinnedLookup(selected: Address | Address[]) {
+  const list = preferRoutableAddress(Array.isArray(selected) ? selected : [selected]);
   return (_hostname: string, options: any, callback: (...args: any[]) => void) => {
     // Node/Undici requests all addresses when autoSelectFamily is enabled. In
     // that mode the callback must receive an array; returning the scalar form
     // makes Node interpret the family as an address and raises ERR_INVALID_IP_ADDRESS.
-    if (options?.all) callback(null, [{ address: selected.address, family: selected.family }]);
-    else callback(null, selected.address, selected.family);
+    if (!list.length) {
+      callback(new Error('No address'));
+      return;
+    }
+    if (options?.all) callback(null, list.map(({ address, family }) => ({ address, family })));
+    else callback(null, list[0].address, list[0].family);
   };
 }
 
@@ -49,6 +65,7 @@ export interface SafeRequestInit {
   headers?: Record<string, string>;
   body?: any;
   signal?: AbortSignal;
+  timeoutMs?: number;
   redirectPolicy?: 'same-origin' | 'any' | 'none';
 }
 
@@ -73,6 +90,12 @@ function redirectedHeaders(current: URL, target: URL, policy: NonNullable<SafeRe
 }
 
 export const redirectSecurity = { redirectTarget, redirectedRequest, redirectedHeaders };
+
+export function outboundTimeouts(signal?: AbortSignal, timeoutMs?: number) {
+  const ms = timeoutMs ?? -1;
+  if (Number.isInteger(ms) && ms >= 0) return { headersTimeout: ms, bodyTimeout: ms };
+  return signal ? { headersTimeout: 0, bodyTimeout: 0 } : {};
+}
 
 function csvSet(name: string) {
   return new Set((process.env[name] ?? '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean));
@@ -124,22 +147,10 @@ export class SafeHttpService {
     let method = init.method ?? 'GET';
     let body = init.body;
     let headers = { ...init.headers };
-    const { redirectPolicy = 'none', ...fetchInit } = init;
+    const { redirectPolicy = 'none' } = init;
     for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
-      const addresses = await this.validateTarget(url);
-      const selected = addresses[0];
-      const dispatcher = new Agent({ connect: {
-        lookup: pinnedLookup(selected),
-      }});
+      const { response, dispatcher } = await this.dispatch(url, init, method, body, headers);
       try {
-        const response = await fetch(url, {
-          ...fetchInit,
-          method,
-          body,
-          redirect: 'manual',
-          dispatcher,
-          headers: { ...headers, 'accept-encoding': 'identity' },
-        });
         if ([301, 302, 303, 307, 308].includes(response.status)) {
           const location = response.headers.get('location');
           await response.body?.cancel();
@@ -164,20 +175,10 @@ export class SafeHttpService {
     let method = init.method ?? 'GET';
     let body = init.body;
     let headers = { ...init.headers };
-    const { redirectPolicy = 'none', ...fetchInit } = init;
+    const { redirectPolicy = 'none' } = init;
     for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
-      const addresses = await this.validateTarget(url);
-      const selected = addresses[0];
-      const dispatcher = new Agent({ connect: { lookup: pinnedLookup(selected) } });
+      const { response, dispatcher } = await this.dispatch(url, init, method, body, headers);
       try {
-        const response = await fetch(url, {
-          ...fetchInit,
-          method,
-          body,
-          redirect: 'manual',
-          dispatcher,
-          headers: { ...headers, 'accept-encoding': 'identity' },
-        });
         if ([301, 302, 303, 307, 308].includes(response.status)) {
           const location = response.headers.get('location');
           await response.body?.cancel();
@@ -199,6 +200,34 @@ export class SafeHttpService {
       }
     }
     throw new Error('远端重定向次数过多');
+  }
+
+  private async dispatch(url: URL, init: SafeRequestInit, method: string, body: any, headers: Record<string, string>) {
+    const addresses = preferRoutableAddress(await this.validateTarget(url));
+    const dispatcher = new Agent({
+      ...outboundTimeouts(init.signal, init.timeoutMs),
+      connectTimeout: CONNECT_TIMEOUT_MS,
+      connect: {
+        timeout: CONNECT_TIMEOUT_MS,
+        servername: tlsServername(url.hostname),
+        lookup: pinnedLookup(addresses),
+      },
+    });
+    try {
+      const response = await fetch(url, {
+        method,
+        body,
+        signal: init.signal,
+        redirect: 'manual',
+        dispatcher,
+        headers: { ...headers, 'accept-encoding': 'identity' },
+      });
+      return { response, dispatcher };
+    } catch (error) {
+      await dispatcher.close().catch(() => undefined);
+      this.logger.warn(`outbound connect fail host=${url.hostname} addrs=${addresses.map((item) => item.address).join(',')}: ${safeErrorMessage(error)}`);
+      throw error;
+    }
   }
 
   private async validateTarget(url: URL): Promise<Address[]> {

@@ -76,7 +76,7 @@ function throwHttp(status: number, body?: Buffer) {
   if (status === 404) {
     failure.message = dash.message
       ? `供应商接口返回 404：${dash.message}`
-      : '供应商接口或模型不存在。Wan 的 Base URL 只需填到 /api/v1（例如 https://dashscope.aliyuncs.com/api/v1 或 https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api/v1），不要带 video-synthesis，也不要使用 compatible-mode。文生视频模型 ID 应为 wan2.7-t2v 或 wan2.7-t2v-2026-06-12。';
+      : '供应商接口或模型不存在。Wan 的 Base URL 优先填 https://dashscope.aliyuncs.com/api/v1，不要带 video-synthesis，也不要使用 compatible-mode。文生视频模型 ID 应为 wan2.7-t2v 或 wan2.7-t2v-2026-06-12。';
   } else if (dash.message && (status === 400 || status === 422)) {
     failure.message = `供应商拒绝了视频或模型参数：${dash.message}`;
   }
@@ -90,8 +90,16 @@ function parseJsonBody(body?: Buffer) {
   catch { return undefined; }
 }
 
-function httpTimeout(deps: VideoAdapterDeps) {
-  return Math.min(Math.max(deps.timeoutSeconds, 10), 60) * 1000;
+export function videoHttpTimeoutMs(deps: Pick<VideoAdapterDeps, 'timeoutSeconds'>) {
+  return Math.min(Math.max(Number(deps.timeoutSeconds) || 180, 10), 3600) * 1000;
+}
+
+export function videoPollTimeoutMs(deps: Pick<VideoAdapterDeps, 'pollTimeoutSeconds'>) {
+  return Math.min(Math.max(Number(deps.pollTimeoutSeconds) || 900, 10), 3600) * 1000;
+}
+
+export function videoLongTimeoutMs(deps: Pick<VideoAdapterDeps, 'timeoutSeconds' | 'pollTimeoutSeconds'>) {
+  return Math.max(videoHttpTimeoutMs(deps), videoPollTimeoutMs(deps), 120_000);
 }
 
 function requestHeaders(deps: VideoAdapterDeps, extra?: Record<string, string>) {
@@ -208,6 +216,7 @@ export function wanInput(request: MediaGenerationRequest) {
 abstract class BaseVideoAdapter implements MediaGenerationAdapter {
   abstract readonly kind: string;
   readonly mediaKind = 'VIDEO' as const;
+  private pollDeadlineAt?: number;
   constructor(protected readonly deps: VideoAdapterDeps) {}
 
   abstract createTask(request: MediaGenerationRequest): Promise<string>;
@@ -215,7 +224,13 @@ abstract class BaseVideoAdapter implements MediaGenerationAdapter {
   abstract testConnection(): Promise<{ ok: boolean; status?: number; message?: string }>;
 
   protected deadline() {
-    return (this.deps.now ?? Date.now)() + this.deps.pollTimeoutSeconds * 1000;
+    this.pollDeadlineAt ??= (this.deps.now ?? Date.now)() + videoPollTimeoutMs(this.deps);
+    return this.pollDeadlineAt;
+  }
+
+  protected abort(kind: 'short' | 'long' = 'short') {
+    const timeoutMs = kind === 'long' ? videoLongTimeoutMs(this.deps) : videoHttpTimeoutMs(this.deps);
+    return { signal: this.deps.signal ?? AbortSignal.timeout(timeoutMs), timeoutMs };
   }
 
   protected async wait(signal?: AbortSignal) {
@@ -231,7 +246,7 @@ abstract class BaseVideoAdapter implements MediaGenerationAdapter {
       method: 'GET',
       headers: requestHeaders(this.deps),
       redirectPolicy: 'same-origin',
-      signal: this.deps.signal ?? AbortSignal.timeout(httpTimeout(this.deps)),
+      ...this.abort('short'),
     }, MAX_ERROR_BYTES);
     if (!response.ok) throwHttp(response.status, response.body);
     const payload = parseJsonBody(response.body);
@@ -245,7 +260,7 @@ abstract class BaseVideoAdapter implements MediaGenerationAdapter {
       headers: requestHeaders(this.deps, { 'Content-Type': 'application/json', ...extraHeaders }),
       body: JSON.stringify(body),
       redirectPolicy: 'same-origin',
-      signal: this.deps.signal ?? AbortSignal.timeout(httpTimeout(this.deps)),
+      ...this.abort('long'),
     }, MAX_ERROR_BYTES);
     if (!response.ok) throwHttp(response.status, response.body);
     const payload = parseJsonBody(response.body);
@@ -261,7 +276,7 @@ abstract class BaseVideoAdapter implements MediaGenerationAdapter {
       method: 'GET' as const,
       headers: credentialed ? requestHeaders(this.deps) : undefined,
       redirectPolicy: credentialed ? 'same-origin' as const : 'any' as const,
-      signal: this.deps.signal ?? AbortSignal.timeout(Math.max(httpTimeout(this.deps), 120_000)),
+      ...this.abort('long'),
     };
     if (!destination) {
       const response = await this.deps.http.request(url, init, MAX_VIDEO_BYTES);
@@ -306,7 +321,7 @@ class OpenAIVideosAdapter extends BaseVideoAdapter {
       headers: requestHeaders(this.deps, extra),
       body: body as any,
       redirectPolicy: 'same-origin',
-      signal: this.deps.signal ?? AbortSignal.timeout(httpTimeout(this.deps)),
+      ...this.abort('long'),
     }, MAX_ERROR_BYTES);
     if (!response.ok) throwHttp(response.status, response.body);
     const id = openaiVideoTaskId(parseJsonBody(response.body));
@@ -385,7 +400,7 @@ class SeedanceAdapter extends BaseVideoAdapter {
         method: 'GET',
         headers: requestHeaders(this.deps),
         redirectPolicy: 'same-origin',
-        signal: AbortSignal.timeout(httpTimeout(this.deps)),
+        ...this.abort('short'),
       }, MAX_ERROR_BYTES);
       if (response.status === 401 || response.status === 403) return { ok: false, status: response.status, message: '供应商认证失败，请检查 API Key、令牌分组及访问权限' };
       return { ok: true, status: response.status };
@@ -441,7 +456,7 @@ class WanAdapter extends BaseVideoAdapter {
         method: 'GET',
         headers: requestHeaders(this.deps),
         redirectPolicy: 'same-origin',
-        signal: AbortSignal.timeout(httpTimeout(this.deps)),
+        ...this.abort('short'),
       }, MAX_ERROR_BYTES);
       if (response.status === 401 || response.status === 403) return { ok: false, status: response.status, message: '供应商认证失败，请检查 API Key、令牌分组及访问权限' };
       return { ok: true, status: response.status };

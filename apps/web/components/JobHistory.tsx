@@ -80,7 +80,7 @@ export default function JobHistory({ conversation, onLoadOlder, referenceIds, on
         </div>
       </div>
       <p>{job.prompt}</p>
-      {job.errorMessage && <p className="error">{job.errorMessage}</p>}
+      {job.errorMessage && <p className="error">{t(job.errorMessage)}</p>}
       {retryErrors[job.id] && <p className="error">{retryErrors[job.id]}</p>}
       {reuseErrors[job.id] && <p className="error">{reuseErrors[job.id]}</p>}
       <div className="job-images">{job.assets.map((jobAsset) => {
