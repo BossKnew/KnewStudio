@@ -10,6 +10,9 @@ All notable changes to KnewStudio are documented here.
 - Admin can choose an adapter, set model parameters, and configure a per-group sliding-window video quota in seconds.
 - Image quotas stay counted in images. Video jobs consume seconds, not image counts.
 - Prompt polishing supports text-to-video. Video outputs are stored as MP4 with first-frame thumbnails.
+- Video jobs honor configured generation and poll timeouts instead of the previous 60s/120s HTTP caps.
+- Connection failures (TCP/TLS) are reported separately from generation timeouts.
+- Wan should use `https://dashscope.aliyuncs.com/api/v1`. Workspace hostnames (`*.maas.aliyuncs.com`) can fail TLS on some networks.
 
 ## [0.1.3] - 2026-08-20
 
