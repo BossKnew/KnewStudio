@@ -4,19 +4,32 @@
 
 KnewStudio is a self-hosted image and video generation workspace for teams. It supports OpenAI Images-compatible providers, OpenAI Videos / Seedance / Wan video adapters, text-to-image generation, full-image editing, masked inpainting, text-to-video, image-to-video, asset management, and an administration console with user groups and model permissions.
 
+Latest release: [v0.2.0](https://github.com/BossKnew/KnewStudio/releases/tag/v0.2.0). Video generation is now a product feature. See the [changelog](CHANGELOG.md).
+
 ## Features
 
 - OpenAI Images-compatible providers plus OpenAI Videos, Seedance, and Wan video adapters
-- Text-to-image generation, reference-image editing, masked inpainting, text-to-video, and image-to-video
+- Text-to-image, reference-image editing, masked inpainting, text-to-video, and image-to-video
+- Studio switch between image and video; playback, download, regenerate, and retry
 - Conversations, generation history, asset library, group-shared reference images, thumbnails, and storage quotas
 - User approval, user groups, model access control, and optional per-group generation quotas
+- Image quotas counted in images; video quotas counted in seconds
 - Mandatory administrator MFA, TOTP, recovery codes, and session revocation
 - Encrypted storage for API keys and MFA secrets
 - SSRF protection for outbound requests, rate limiting, CSRF protection, and security headers
 - PostgreSQL, Redis, background job queues, and Docker Compose deployment
 - Chinese and English user interfaces
 
-Video jobs are asynchronous: the worker creates an upstream task, polls until it finishes, then stores the MP4. Administrators set each video model’s allowed aspect ratios, durations, and optional resolutions. Group video quotas are a sliding window of seconds per member, independent from image quotas.
+## Video Generation
+
+[v0.2.0](https://github.com/BossKnew/KnewStudio/releases/tag/v0.2.0) exposes video generation. Earlier releases reserved the adapter interfaces but did not turn them on.
+
+- Text-to-video and image-to-video with aspect ratio, duration, and optional resolution
+- Adapters: OpenAI Videos, Seedance (Volcengine Ark), and Wan (DashScope). Gateways that speak the OpenAI Videos protocol can reuse the OpenAI Videos adapter
+- Asynchronous jobs: the worker creates an upstream task, polls until it finishes, then stores the MP4 with a first-frame thumbnail
+- Administrators set each video model's allowed aspect ratios, durations, and optional resolutions, plus a poll timeout
+- Group video quotas are a sliding window of seconds per member, independent from image quotas
+- Prompt polishing supports text-to-video
 
 Local development of video thumbnails requires `ffmpeg` on the host. The Docker API image includes ffmpeg.
 
@@ -119,7 +132,7 @@ More reverse-proxy examples are available in the [`deploy`](deploy) directory.
 
 ## Local Development
 
-Requirements: Node.js 24, npm 11, PostgreSQL, and Redis.
+Requirements: Node.js 24, npm 11, PostgreSQL, Redis, and `ffmpeg` for video thumbnails.
 
 ```bash
 npm ci
@@ -152,6 +165,10 @@ GitHub Actions also builds the complete container stack and checks the public he
 Do not commit `.env`, `secrets/`, private keys, database backups, or runtime media files. The project excludes these by default through `.gitignore` and `.dockerignore`.
 
 Report security issues privately according to [`SECURITY.md`](SECURITY.md). Do not disclose exploitable details in public issues.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) and [GitHub Releases](https://github.com/BossKnew/KnewStudio/releases).
 
 ## License
 

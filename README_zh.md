@@ -4,21 +4,34 @@
 
 KnewStudio 是一个面向团队的自托管图片与视频生成工作台。它支持 OpenAI Images 兼容供应商、OpenAI Videos / Seedance / Wan 视频适配器、文生图、整图编辑、蒙版局部重绘、文生视频、图生视频、素材管理，以及带用户组和模型权限的管理后台。
 
+最新版本：[v0.2.0](https://github.com/BossKnew/KnewStudio/releases/tag/v0.2.0)。视频生成现已作为产品功能开放。详见 [更新日志](CHANGELOG.md)。
+
 ## 功能
 
 - OpenAI Images 兼容供应商，以及 OpenAI Videos、Seedance、Wan 视频适配器
 - 文生图、参考图编辑、蒙版局部重绘、文生视频和图生视频
+- Studio 可在图片与视频之间切换；支持播放、下载、重新生成和重试
 - 会话、生成历史、素材库、组内分享参考图、缩略图与存储配额
 - 用户审批、用户组、模型访问控制和可选的组级生成额度
+- 图片额度按张计数，视频额度按秒计数
 - 管理员强制 MFA、TOTP、恢复码和会话撤销
 - API Key 与 MFA 密钥加密存储
 - 出站请求 SSRF 防护、速率限制、CSRF 防护与安全响应头
 - PostgreSQL、Redis、后台任务队列和 Docker Compose 部署
 - 中文、英文界面
 
-视频任务是异步的：工作进程先创建上游任务，轮询完成后再保存 MP4。管理员为每个视频模型配置允许的比例、时长和可选分辨率。用户组视频额度按滑动窗口内每人秒数计算，与图片张数额度相互独立。
+## 视频生成
 
-本机开发视频缩略图需要安装 ffmpeg。Docker API 镜像已包含 ffmpeg。
+[v0.2.0](https://github.com/BossKnew/KnewStudio/releases/tag/v0.2.0) 开放了视频生成。更早的版本只在代码中预留了适配器接口，并未作为产品功能开放。
+
+- 文生视频和图生视频，可配置比例、时长和可选分辨率
+- 适配器：OpenAI Videos、Seedance（火山方舟）、Wan（通义万相）。兼容 OpenAI Videos 协议的网关可复用 OpenAI Videos 适配器
+- 异步任务：工作进程先创建上游任务，轮询完成后再保存 MP4，并生成首帧缩略图
+- 管理员为每个视频模型配置允许的比例、时长、可选分辨率，以及任务等待超时
+- 用户组视频额度按滑动窗口内每人秒数计算，与图片张数额度相互独立
+- 提示词润色支持文生视频
+
+本机开发视频缩略图需要安装 `ffmpeg`。Docker API 镜像已包含 ffmpeg。
 
 ## 技术栈
 
@@ -119,7 +132,7 @@ docker compose -f docker-compose.yml -f compose.secrets.yml up -d --build
 
 ## 本地开发
 
-环境要求：Node.js 24、npm 11、PostgreSQL 和 Redis。
+环境要求：Node.js 24、npm 11、PostgreSQL、Redis，以及用于视频缩略图的 `ffmpeg`。
 
 ```bash
 npm ci
@@ -152,6 +165,10 @@ GitHub Actions 还会构建完整容器栈并检查公开健康端点。
 不要提交 `.env`、`secrets/`、私钥、数据库备份或运行时媒体文件。项目默认已在 `.gitignore` 和 `.dockerignore` 中排除这些内容。
 
 安全问题请按照 [`SECURITY.md`](SECURITY.md) 私下报告，不要在公开 Issue 中披露可利用细节。
+
+## 更新日志
+
+参见 [CHANGELOG.md](CHANGELOG.md) 和 [GitHub Releases](https://github.com/BossKnew/KnewStudio/releases)。
 
 ## 许可证
 
