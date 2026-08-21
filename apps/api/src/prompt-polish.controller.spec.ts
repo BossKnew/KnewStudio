@@ -9,7 +9,7 @@ describe('PromptPolishController', () => {
 
     await expect(controller.polish({ id: 'user-1' } as any, { prompt: 'a cat', mode: 'TEXT_TO_IMAGE' })).resolves.toEqual({ polishedPrompt: 'polished' });
     expect(limits.consume).toHaveBeenCalledWith('prompt-polish-user', 'user-1', expect.any(Number), 600);
-    expect(service.polish).toHaveBeenCalledWith('a cat');
+    expect(service.polish).toHaveBeenCalledWith('a cat', 'TEXT_TO_IMAGE');
   });
 
   it('rejects editing modes before calling the LLM service', async () => {

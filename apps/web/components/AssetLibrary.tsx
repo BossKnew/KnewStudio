@@ -25,6 +25,7 @@ export default function AssetLibrary({
 }: AssetLibraryProps) {
   const { t } = useI18n();
   const [tab, setTab] = useState<LibraryTab>('mine');
+  const [mediaFilter, setMediaFilter] = useState<'ALL' | 'IMAGE' | 'VIDEO'>('ALL');
   const [groups, setGroups] = useState<StudioGroup[]>([]);
   const [groupId, setGroupId] = useState('');
   const [sharedAssets, setSharedAssets] = useState<Asset[]>([]);
@@ -43,7 +44,7 @@ export default function AssetLibrary({
   const [downloadMessage, setDownloadMessage] = useState('');
   const [error, setError] = useState('');
 
-  const visible = tab === 'mine' ? assets : sharedAssets;
+  const visible = (tab === 'mine' ? assets : sharedAssets).filter((asset) => mediaFilter === 'ALL' || (asset.mediaKind ?? 'IMAGE') === mediaFilter);
   const canShare = groups.length > 0;
 
   useEffect(() => {
@@ -231,7 +232,12 @@ export default function AssetLibrary({
     <div className="asset-bulk-toolbar">
       <button className="button" type="button" disabled={!visible.length || downloadBusy} onClick={toggleAll}>{visible.length > 0 && visible.every((asset) => selectedIds.has(asset.id)) ? t('取消全选') : t('全选当前页')}</button>
       <span className="muted">{t('已选择')} {selectedIds.size}</span>
-      <button className="button primary" type="button" disabled={!selectedIds.size || downloadBusy} onClick={() => void downloadSelected()}>{downloadBusy ? t('下载中…') + ' ' + downloadProgress + '/' + selectedIds.size : t('下载所选图片')}</button>
+      <button className="button primary" type="button" disabled={!selectedIds.size || downloadBusy} onClick={() => void downloadSelected()}>{downloadBusy ? t('下载中…') + ' ' + downloadProgress + '/' + selectedIds.size : t('下载所选素材')}</button>
+    </div>
+    <div className="asset-group-filters" aria-label={t('素材类型')}>
+      <button className={mediaFilter === 'ALL' ? 'active' : ''} type="button" onClick={() => setMediaFilter('ALL')}>{t('全部')}</button>
+      <button className={mediaFilter === 'IMAGE' ? 'active' : ''} type="button" onClick={() => setMediaFilter('IMAGE')}>{t('图片')}</button>
+      <button className={mediaFilter === 'VIDEO' ? 'active' : ''} type="button" onClick={() => setMediaFilter('VIDEO')}>{t('视频')}</button>
     </div>
     {downloadMessage && <p className={downloadMessage.includes(t('失败')) ? 'error' : 'success'}>{downloadMessage}</p>}
     {error && <p className="error">{error}</p>}
@@ -242,9 +248,10 @@ export default function AssetLibrary({
           <span aria-hidden="true">✓</span>
         </label>
         {tab === 'mine' && Boolean(asset.sharedGroupIds?.length) && <span className="asset-share-badge">{t('已分享')}</span>}
-        <button className="image-thumbnail" type="button" onClick={() => onOpenAsset(asset)} aria-label={t('放大查看图片')}>
+        <button className="image-thumbnail" type="button" onClick={() => onOpenAsset(asset)} aria-label={asset.mediaKind === 'VIDEO' ? t('播放生成视频') : t('放大查看图片')}>
           <img src={asset.thumbnailUrl ?? asset.contentUrl} loading="lazy" decoding="async" alt={asset.role === 'OUTPUT' ? t('生成资产') : t('上传资产')} />
-          <span className="image-expand" aria-hidden="true">{t('放大')}</span>
+          {asset.mediaKind === 'VIDEO' && <span className="video-play-badge" aria-hidden="true">▶</span>}
+          <span className="image-expand" aria-hidden="true">{asset.mediaKind === 'VIDEO' ? t('播放') : t('放大')}</span>
         </button>
         <div className="asset-meta">
           <span className="asset-kind">{asset.role === 'OUTPUT' ? t('生成') : t('上传')}</span>
@@ -262,7 +269,7 @@ export default function AssetLibrary({
           </div>
         </div>}
         <div className="asset-actions">
-          {tab === 'shared' && <button className="icon-action" type="button" onClick={() => onUseAsReference(asset)} aria-label={t('设为参考图')} title={t('设为参考图')}><ReferenceIcon /></button>}
+          {tab === 'shared' && asset.mediaKind !== 'VIDEO' && <button className="icon-action" type="button" onClick={() => onUseAsReference(asset)} aria-label={t('设为参考图')} title={t('设为参考图')}><ReferenceIcon /></button>}
           {tab === 'mine' && <button className={'icon-action ' + (asset.sharedGroupIds?.length ? 'has-value' : '')} type="button" disabled={!canShare} onClick={() => void beginShare(asset)} aria-label={t('分享到用户组')} title={canShare ? t('分享到用户组') : t('你还不在任何用户组中，请联系管理员。')}><ShareIcon /></button>}
           {tab === 'mine' && <button className={'icon-action ' + (asset.note ? 'has-value' : '')} type="button" onClick={() => beginNote(asset)} aria-label={asset.note ? t('编辑备注') : t('添加备注')} title={asset.note ? t('编辑备注') : t('添加备注')}><NoteIcon /></button>}
           {tab === 'mine' && <button className="icon-action danger-action" type="button" onClick={() => void deleteAsset(asset)} aria-label={t('删除资产')} title={t('删除')}><DeleteIcon /></button>}

@@ -3,7 +3,7 @@ import { api, json } from '@/lib/api';
 import GenerationSettings from '@/components/GenerationSettings';
 import MaskCanvas from '@/components/MaskCanvas';
 import PromptHistory from '@/components/PromptHistory';
-import type { Asset, GenerationCreated, GenerationMode, GenerationReuse, ReferenceSelection, StudioModel } from '@/lib/studio-types';
+import type { Asset, GenerationCreated, GenerationMode, GenerationReuse, MediaKind, ReferenceSelection, StudioModel } from '@/lib/studio-types';
 import type { OptionLabelMap } from '@/lib/option-labels';
 import { useI18n } from '@/lib/i18n';
 
@@ -23,8 +23,10 @@ export default function StudioComposer({ models, optionLabels = {}, conversation
   const [prompt, setPrompt] = useState('');
   const [modelId, setModelId] = useState('');
   const [mode, setMode] = useState<GenerationMode>('TEXT_TO_IMAGE');
+  const [mediaKind, setMediaKind] = useState<MediaKind>('IMAGE');
   const [size, setSize] = useState('');
   const [quality, setQuality] = useState('');
+  const [duration, setDuration] = useState(5);
   const [count, setCount] = useState(1);
   const [sourceInputKey, setSourceInputKey] = useState(0);
   const [maskFile, setMaskFile] = useState<File | null>(null);
@@ -32,20 +34,24 @@ export default function StudioComposer({ models, optionLabels = {}, conversation
   const [polishBusy, setPolishBusy] = useState(false);
   const [polishPreview, setPolishPreview] = useState<{ sourcePrompt: string; polishedPrompt: string } | null>(null);
   const [error, setError] = useState('');
-  const model = useMemo(() => models.find((item) => item.id === modelId), [models, modelId]);
+  const visibleModels = useMemo(() => models.filter((item) => (item.mediaKind ?? 'IMAGE') === mediaKind), [models, mediaKind]);
+  const model = useMemo(() => visibleModels.find((item) => item.id === modelId), [visibleModels, modelId]);
+  const video = mediaKind === 'VIDEO';
   const hasSource = references.length > 0;
   const maxInputImages = model?.maxInputImages ?? 8;
   const primaryReference = references[0];
 
   useEffect(() => {
-    if (model || !models[0]) return;
-    chooseModel(models[0]);
-  }, [models, model]);
+    if (model || !visibleModels[0]) return;
+    chooseModel(visibleModels[0]);
+  }, [visibleModels, model]);
 
   useEffect(() => {
     if (!reusePreset) return;
     const targetModel = reusePreset.modelId ? models.find((item) => item.id === reusePreset.modelId) : undefined;
     const warnings: string[] = [];
+    const nextKind: MediaKind = reusePreset.mode === 'TEXT_TO_VIDEO' || reusePreset.mode === 'IMAGE_TO_VIDEO' ? 'VIDEO' : 'IMAGE';
+    setMediaKind(nextKind);
     setPrompt(reusePreset.prompt);
     setMode(reusePreset.mode);
     onReferencesChange(reusePreset.sourceAssets.map((asset) => ({ key: 'reuse-' + asset.id, kind: 'asset', asset })));
@@ -56,12 +62,19 @@ export default function StudioComposer({ models, optionLabels = {}, conversation
       setModelId(targetModel.id);
       const nextSize = reusePreset.size && targetModel.allowedSizes.includes(reusePreset.size) ? reusePreset.size : targetModel.defaults.size ?? targetModel.allowedSizes[0];
       const nextQuality = reusePreset.quality && targetModel.allowedQualities.includes(reusePreset.quality) ? reusePreset.quality : targetModel.defaults.quality ?? targetModel.allowedQualities[0];
+      const durations = targetModel.allowedDurations ?? [];
+      const nextDuration = reusePreset.durationSeconds && durations.includes(reusePreset.durationSeconds) ? reusePreset.durationSeconds : targetModel.defaults.durationSeconds ?? durations[0] ?? 5;
       setSize(nextSize);
       setQuality(nextQuality);
+      setDuration(nextDuration);
       setCount(Math.min(targetModel.maxImages, Math.max(1, reusePreset.count)));
       if (reusePreset.mode === 'IMAGE_EDIT' && !targetModel.supportsEdit || reusePreset.mode === 'INPAINT' && !targetModel.supportsInpaint) {
         setMode('TEXT_TO_IMAGE');
         warnings.push(t('历史任务的编辑模式已不再受当前模型支持，请重新选择模型。'));
+      }
+      if (reusePreset.mode === 'IMAGE_TO_VIDEO' && !targetModel.supportsEdit) {
+        setMode('TEXT_TO_VIDEO');
+        warnings.push(t('历史任务的图生视频已不再受当前模型支持，请重新选择模型。'));
       }
     } else {
       warnings.push(t('历史任务使用的模型') + '“' + reusePreset.modelDisplayName + '”' + t('已不可用，请重新选择模型。'));
@@ -74,15 +87,19 @@ export default function StudioComposer({ models, optionLabels = {}, conversation
   function chooseModel(item: StudioModel) {
     setModelId(item.id);
     setSize(item.defaults.size ?? item.allowedSizes[0]);
-    setQuality(item.defaults.quality ?? item.allowedQualities[0]);
+    setQuality(item.defaults.quality ?? item.allowedQualities[0] ?? '');
+    setDuration(item.defaults.durationSeconds ?? item.allowedDurations?.[0] ?? 5);
     setCount(item.defaults.count ?? 1);
-    setMode((current) => current === 'IMAGE_EDIT' && !item.supportsEdit || current === 'INPAINT' && !item.supportsInpaint ? 'TEXT_TO_IMAGE' : current);
+    setMode((current) => {
+      if ((item.mediaKind ?? 'IMAGE') === 'VIDEO') return current === 'IMAGE_TO_VIDEO' && item.supportsEdit ? 'IMAGE_TO_VIDEO' : 'TEXT_TO_VIDEO';
+      return current === 'IMAGE_EDIT' && !item.supportsEdit || current === 'INPAINT' && !item.supportsInpaint ? 'TEXT_TO_IMAGE' : current === 'TEXT_TO_VIDEO' || current === 'IMAGE_TO_VIDEO' ? 'TEXT_TO_IMAGE' : current;
+    });
   }
 
   function resetComposer() {
     setPrompt('');
     setPolishPreview(null);
-    setMode('TEXT_TO_IMAGE');
+    setMode(video ? 'TEXT_TO_VIDEO' : 'TEXT_TO_IMAGE');
     onReferencesChange([]);
     setMaskFile(null);
     setSourceInputKey((current) => current + 1);
@@ -90,8 +107,20 @@ export default function StudioComposer({ models, optionLabels = {}, conversation
     if (model) {
       setSize(model.defaults.size ?? model.allowedSizes[0]);
       setQuality(model.defaults.quality ?? model.allowedQualities[0]);
+      setDuration(model.defaults.durationSeconds ?? model.allowedDurations?.[0] ?? 5);
       setCount(model.defaults.count ?? 1);
     }
+  }
+
+  function switchMediaKind(next: MediaKind) {
+    if (next === mediaKind) return;
+    setMediaKind(next);
+    setModelId('');
+    setMode(next === 'VIDEO' ? 'TEXT_TO_VIDEO' : 'TEXT_TO_IMAGE');
+    setPolishPreview(null);
+    onReferencesChange([]);
+    setMaskFile(null);
+    setError('');
   }
 
   async function polishPrompt() {
@@ -104,7 +133,7 @@ export default function StudioComposer({ models, optionLabels = {}, conversation
     setPolishBusy(true);
     setError('');
     try {
-      const result = await api<{ polishedPrompt: string }>('/prompt-polish', json('POST', { prompt: sourcePrompt, mode: 'TEXT_TO_IMAGE' }));
+      const result = await api<{ polishedPrompt: string }>('/prompt-polish', json('POST', { prompt: sourcePrompt, mode: video ? 'TEXT_TO_VIDEO' : 'TEXT_TO_IMAGE' }));
       setPolishPreview({ sourcePrompt, polishedPrompt: result.polishedPrompt });
     } catch (caught) {
       setError((caught as Error).message);
@@ -136,11 +165,11 @@ export default function StudioComposer({ models, optionLabels = {}, conversation
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError('');
-    if (mode === 'TEXT_TO_IMAGE' && hasSource) {
-      setError(t('已选参考图') + '，' + t('请切换到整图编辑或局部重绘') + '。');
+    if ((mode === 'TEXT_TO_IMAGE' || mode === 'TEXT_TO_VIDEO') && hasSource) {
+      setError(t('已选参考图') + '，' + (video ? t('请切换到图生视频') : t('请切换到整图编辑或局部重绘')) + '。');
       return;
     }
-    if (mode !== 'TEXT_TO_IMAGE' && !hasSource) {
+    if (mode !== 'TEXT_TO_IMAGE' && mode !== 'TEXT_TO_VIDEO' && !hasSource) {
       setError(t('原图') + '：' + t('请选择或上传一张原图'));
       return;
     }
@@ -165,6 +194,7 @@ export default function StudioComposer({ models, optionLabels = {}, conversation
         size,
         quality,
         count,
+        ...(video ? { durationSeconds: duration } : {}),
         sourceAssetIds,
         maskAssetId: uploadedMask?.id,
       }));
@@ -199,11 +229,16 @@ export default function StudioComposer({ models, optionLabels = {}, conversation
 
   return <form className={'composer card stack ' + (conversationId ? 'compact-composer' : '')} onSubmit={submit}>
     <h1>{t('想创作什么？')}</h1>
+    <div className="media-kind-tabs" role="tablist" aria-label={t('创作类型')}>
+      <button className={mediaKind === 'IMAGE' ? 'active' : ''} type="button" role="tab" aria-selected={mediaKind === 'IMAGE'} onClick={() => switchMediaKind('IMAGE')}>{t('图片')}</button>
+      <button className={mediaKind === 'VIDEO' ? 'active' : ''} type="button" role="tab" aria-selected={mediaKind === 'VIDEO'} onClick={() => switchMediaKind('VIDEO')}>{t('视频')}</button>
+    </div>
+    {video && !visibleModels.length && <p className="muted">{t('还没有可用的视频模型，请联系管理员接入供应商并授权。')}</p>}
     <div className="prompt-input-wrap">
-      <textarea className="field prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={t('输入图片描述或编辑要求')} required />
+      <textarea className="field prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={video ? t('输入视频描述或镜头要求') : t('输入图片描述或编辑要求')} required />
       <div className="prompt-input-actions">
         <PromptHistory onPick={(value) => { setPrompt(value); setPolishPreview(null); }} />
-        {mode === 'TEXT_TO_IMAGE' && <button className="button prompt-polish-button" type="button" disabled={polishBusy || busy} onClick={() => void polishPrompt()}>{polishBusy ? t('正在润色…') : t('提示词润色')}</button>}
+        {(mode === 'TEXT_TO_IMAGE' || mode === 'TEXT_TO_VIDEO') && <button className="button prompt-polish-button" type="button" disabled={polishBusy || busy} onClick={() => void polishPrompt()}>{polishBusy ? t('正在润色…') : t('提示词润色')}</button>}
       </div>
     </div>
     {polishPreview && <section className="prompt-polish-preview" aria-live="polite">
@@ -219,24 +254,37 @@ export default function StudioComposer({ models, optionLabels = {}, conversation
       </div>)}
       <p className="muted reference-limit">{t('参考图数量')}：{references.length}/{maxInputImages}</p>
     </div>}
-    {mode !== 'TEXT_TO_IMAGE' && <label className="source-upload">{t('添加参考图')}（{t('可多选')}）
+    {mode !== 'TEXT_TO_IMAGE' && mode !== 'TEXT_TO_VIDEO' && <label className="source-upload">{t('添加参考图')}（{t('可多选')}）
       <input key={sourceInputKey} className="field" type="file" accept="image/png,image/jpeg,image/webp" multiple required={!hasSource} onChange={(event) => { addFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ''; }} />
     </label>}
     {mode === 'INPAINT' && maskSource && <MaskCanvas imageSource={maskSource} onMask={setMaskFile} />}
     <div className="composer-controls">
-      <select className="field compact-field" value={modelId} onChange={(event) => { const found = models.find((item) => item.id === event.target.value); if (found) chooseModel(found); }} required><option value="">{t('选择模型')}</option>{models.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select>
-      <select className="field compact-field" value={mode} onChange={(event) => { const nextMode = event.target.value as GenerationMode; setMode(nextMode); if (nextMode !== 'TEXT_TO_IMAGE') setPolishPreview(null); setError(''); }}><option value="TEXT_TO_IMAGE">{t('文生图')}</option>{model?.supportsEdit && <option value="IMAGE_EDIT">{t('整图编辑')}</option>}{model?.supportsInpaint && <option value="INPAINT">{t('局部重绘')}</option>}</select>
+      <select className="field compact-field" value={modelId} onChange={(event) => { const found = visibleModels.find((item) => item.id === event.target.value); if (found) chooseModel(found); }} required><option value="">{t('选择模型')}</option>{visibleModels.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select>
+      <select className="field compact-field" value={mode} onChange={(event) => { const nextMode = event.target.value as GenerationMode; setMode(nextMode); if (nextMode !== 'TEXT_TO_IMAGE' && nextMode !== 'TEXT_TO_VIDEO') setPolishPreview(null); setError(''); }}>
+        {video ? <>
+          <option value="TEXT_TO_VIDEO">{t('文生视频')}</option>
+          {model?.supportsEdit && <option value="IMAGE_TO_VIDEO">{t('图生视频')}</option>}
+        </> : <>
+          <option value="TEXT_TO_IMAGE">{t('文生图')}</option>
+          {model?.supportsEdit && <option value="IMAGE_EDIT">{t('整图编辑')}</option>}
+          {model?.supportsInpaint && <option value="INPAINT">{t('局部重绘')}</option>}
+        </>}
+      </select>
       <GenerationSettings
+        kind={mediaKind}
         sizes={model?.allowedSizes ?? []}
         qualities={model?.allowedQualities ?? []}
+        durations={model?.allowedDurations ?? []}
         optionLabels={optionLabels}
         maxImages={model?.maxImages ?? 1}
         size={size}
         quality={quality}
+        duration={duration}
         count={count}
         disabled={!model}
         onSizeChange={setSize}
         onQualityChange={setQuality}
+        onDurationChange={setDuration}
         onCountChange={setCount}
       />
       <button className="button primary generate-button" disabled={busy || !modelId || mode === 'INPAINT' && !maskFile}>{busy ? t('正在提交/生成…') : t('开始生成')}</button>

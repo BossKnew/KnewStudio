@@ -6,6 +6,7 @@ const UNITS: Record<string, number> = {
 };
 
 export const MAX_QUOTA_IMAGES = 1_000_000;
+export const MAX_QUOTA_VIDEO_SECONDS = 1_000_000;
 
 export type QuotaPolicy = {
   groupId: string;
@@ -13,6 +14,14 @@ export type QuotaPolicy = {
   window: string;
   windowSeconds: number;
   images: number;
+};
+
+export type VideoQuotaPolicy = {
+  groupId: string;
+  name: string;
+  window: string;
+  windowSeconds: number;
+  seconds: number;
 };
 
 export type QuotaEventView = { createdAt: Date; imageCount: number };
@@ -42,6 +51,21 @@ export function parseQuotaPair(window: unknown, images: unknown) {
   return { quotaWindow: parseQuotaWindow(window).value, quotaImages: parseQuotaImages(images) };
 }
 
+export function parseQuotaVideoSeconds(value: unknown) {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > MAX_QUOTA_VIDEO_SECONDS) {
+    throw new Error('视频额度秒数必须为 1-1000000 的整数');
+  }
+  return value;
+}
+
+export function parseVideoQuotaPair(window: unknown, seconds: unknown) {
+  const windowEmpty = window === undefined || window === null || (typeof window === 'string' && !window.trim());
+  const secondsEmpty = seconds === undefined || seconds === null;
+  if (windowEmpty && secondsEmpty) return { videoQuotaWindow: null, quotaVideoSeconds: null };
+  if (windowEmpty || secondsEmpty) throw new Error('视频额度的窗口和秒数必须同时填写或同时留空');
+  return { videoQuotaWindow: parseQuotaWindow(window).value, quotaVideoSeconds: parseQuotaVideoSeconds(seconds) };
+}
+
 export function quotaPoliciesFromGroups(groups: Array<{ id: string; name: string; quotaWindow: string | null; quotaImages: number | null }>): QuotaPolicy[] {
   return groups.flatMap((group) => {
     if (!group.quotaWindow || group.quotaImages == null) return [];
@@ -53,6 +77,32 @@ export function quotaPoliciesFromGroups(groups: Array<{ id: string; name: string
       return [];
     }
   });
+}
+
+export function videoQuotaPoliciesFromGroups(groups: Array<{ id: string; name: string; videoQuotaWindow: string | null; quotaVideoSeconds: number | null }>): VideoQuotaPolicy[] {
+  return groups.flatMap((group) => {
+    if (!group.videoQuotaWindow || group.quotaVideoSeconds == null) return [];
+    try {
+      const window = parseQuotaWindow(group.videoQuotaWindow);
+      if (group.quotaVideoSeconds < 1 || group.quotaVideoSeconds > MAX_QUOTA_VIDEO_SECONDS) return [];
+      return [{ groupId: group.id, name: group.name, window: window.value, windowSeconds: window.seconds, seconds: group.quotaVideoSeconds }];
+    } catch {
+      return [];
+    }
+  });
+}
+
+export function videoEventsAsUnits(events: Array<{ createdAt: Date; videoSeconds: number }>): QuotaEventView[] {
+  return events.map((event) => ({ createdAt: event.createdAt, imageCount: event.videoSeconds }));
+}
+
+export function evaluateVideoPolicies(policies: VideoQuotaPolicy[], events: Array<{ createdAt: Date; videoSeconds: number }>, incoming: number, now = new Date()) {
+  return evaluatePolicies(
+    policies.map((policy) => ({ groupId: policy.groupId, name: policy.name, window: policy.window, windowSeconds: policy.windowSeconds, images: policy.seconds })),
+    videoEventsAsUnits(events),
+    incoming,
+    now,
+  );
 }
 
 export function eventsInWindow(events: QuotaEventView[], now: Date, windowSeconds: number) {

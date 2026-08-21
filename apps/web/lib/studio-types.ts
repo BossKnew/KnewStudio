@@ -23,27 +23,42 @@ export type UsagePolicy = {
   retryAfterSeconds: number;
 };
 
+export type VideoUsagePolicy = {
+  groupId: string;
+  groupName: string;
+  window: string;
+  seconds: number;
+  used: number;
+  remaining: number;
+  resetAt: string | null;
+  retryAfterSeconds: number;
+};
+
 export type UsageSnapshot = {
   storageBytes: string;
   storageQuotaBytes: string;
   policies: UsagePolicy[];
+  videoPolicies?: VideoUsagePolicy[];
 };
 export type CursorPage<T> = { items: T[]; nextCursor: string | null; total?: number };
 
-export type GenerationMode = 'TEXT_TO_IMAGE' | 'IMAGE_EDIT' | 'INPAINT';
+export type MediaKind = 'IMAGE' | 'VIDEO';
+export type GenerationMode = 'TEXT_TO_IMAGE' | 'IMAGE_EDIT' | 'INPAINT' | 'TEXT_TO_VIDEO' | 'IMAGE_TO_VIDEO';
 export type GenerationStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
 
 export type StudioModel = {
   id: string;
   displayName: string;
+  mediaKind?: MediaKind;
   supportsGeneration: boolean;
   supportsEdit: boolean;
   supportsInpaint: boolean;
   allowedSizes: string[];
   allowedQualities: string[];
+  allowedDurations?: number[];
   maxImages: number;
   maxInputImages: number;
-  defaults: { size?: string; quality?: string; count?: number };
+  defaults: { size?: string; quality?: string; count?: number; durationSeconds?: number };
 };
 
 export type ConversationSummary = { id: string; title: string; _count: { jobs: number } };
@@ -53,6 +68,8 @@ export type StudioGroup = { id: string; name: string };
 export type Asset = {
   id: string;
   role: 'UPLOAD' | 'OUTPUT' | 'MASK';
+  mediaKind?: MediaKind;
+  durationMs?: number | null;
   contentUrl: string;
   thumbnailUrl?: string | null;
   width: number | null;
@@ -78,9 +95,10 @@ export type GenerationJob = {
   conversationId?: string;
   status: GenerationStatus;
   mode: GenerationMode;
+  mediaKind?: MediaKind;
   prompt: string;
   errorMessage: string | null;
-  parameters: { count?: number };
+  parameters: { count?: number; durationSeconds?: number; size?: string; quality?: string };
   modelSnapshot: { displayName: string };
   assets: JobAsset[];
 };
@@ -100,6 +118,7 @@ export type GenerationReuse = {
   size: string | null;
   quality: string | null;
   count: number;
+  durationSeconds?: number | null;
   sourceAssets: Asset[];
   requiresMaskRedraw: boolean;
 };

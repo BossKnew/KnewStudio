@@ -1,4 +1,4 @@
-import { evaluatePolicies, eventsInWindow, parseQuotaPair, parseQuotaWindow, quotaPoliciesFromGroups, retryAfterSeconds, usedImages } from './generation-quota';
+import { evaluatePolicies, evaluateVideoPolicies, eventsInWindow, parseQuotaPair, parseQuotaWindow, parseVideoQuotaPair, quotaPoliciesFromGroups, retryAfterSeconds, usedImages, videoQuotaPoliciesFromGroups } from './generation-quota';
 
 describe('generation quota window', () => {
   it('parses the same duration units as session length', () => {
@@ -50,5 +50,26 @@ describe('generation quota window', () => {
     const now = new Date('2026-08-20T12:00:00.000Z');
     const intern = { groupId: 'intern', name: 'Intern', window: '5h', windowSeconds: 5 * 60 * 60, images: 5 };
     expect(evaluatePolicies([intern], [{ createdAt: new Date('2026-08-20T11:00:00.000Z'), imageCount: 3 }], 2, now)).toEqual({ ok: true });
+  });
+
+  it('requires video window and seconds together', () => {
+    expect(parseVideoQuotaPair(null, null)).toEqual({ videoQuotaWindow: null, quotaVideoSeconds: null });
+    expect(() => parseVideoQuotaPair('1d', null)).toThrow('视频额度的窗口和秒数必须同时填写或同时留空');
+    expect(parseVideoQuotaPair('1D', 60)).toEqual({ videoQuotaWindow: '1d', quotaVideoSeconds: 60 });
+  });
+
+  it('rejects a 5 second video when only 3 seconds remain', () => {
+    const now = new Date('2026-08-20T12:00:00.000Z');
+    const intern = { groupId: 'intern', name: 'Intern', window: '1d', windowSeconds: 24 * 60 * 60, seconds: 8 };
+    const events = [{ createdAt: new Date('2026-08-20T11:00:00.000Z'), videoSeconds: 5 }];
+    expect(videoQuotaPoliciesFromGroups([{ id: 'intern', name: 'Intern', videoQuotaWindow: '1d', quotaVideoSeconds: 8 }])).toEqual([intern]);
+    const result = evaluateVideoPolicies([intern], events, 5, now);
+    expect(result.ok).toBe(false);
+  });
+
+  it('does not count image events as video seconds', () => {
+    const now = new Date('2026-08-20T12:00:00.000Z');
+    const intern = { groupId: 'intern', name: 'Intern', window: '1d', windowSeconds: 24 * 60 * 60, seconds: 5 };
+    expect(evaluateVideoPolicies([intern], [{ createdAt: new Date('2026-08-20T11:00:00.000Z'), videoSeconds: 0 }], 5, now)).toEqual({ ok: true });
   });
 });

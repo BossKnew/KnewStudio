@@ -66,6 +66,11 @@ a { color: #67e8f9; }
 .compact-composer .prompt { min-height: 80px; max-height: 140px; padding: 10px; }
 .compact-composer .row { gap: 8px; }
 .compact-composer .field { padding-top: 8px; padding-bottom: 8px; }
+.media-kind-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; padding: 3px; border-radius: 9px; background: #111318; }
+.media-kind-tabs button { padding: 8px; border: 0; border-radius: 7px; background: transparent; color: #9ca3af; }
+.media-kind-tabs button:hover, .media-kind-tabs button.active { background: #292c34; color: #67e8f9; }
+.video-play-badge { position: absolute; left: 8px; bottom: 8px; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 999px; background: rgb(0 0 0 / 62%); color: #fff; font-size: 12px; }
+.image-viewer-stage video { max-width: 100%; max-height: min(80vh, 720px); background: #090a0c; }
 .composer-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .composer-controls .generate-button { width: 150px; margin-left: auto; }
 .generation-settings { position: relative; flex: 0 1 auto; }

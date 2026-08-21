@@ -131,5 +131,6 @@ export class ConversationsController {
 function extensionForMime(mimeType: string) {
   if (mimeType === 'image/jpeg') return '.jpg';
   if (mimeType === 'image/webp') return '.webp';
+  if (mimeType === 'video/mp4') return '.mp4';
   return '.png';
 }

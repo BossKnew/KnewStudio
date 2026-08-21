@@ -33,6 +33,8 @@ RUN npm pkg delete dependencies.prisma devDependencies.typescript --workspace @k
 
 FROM api-runtime-deps AS api
 ENV NODE_ENV=production
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/apps/api/dist ./apps/api/dist
 RUN test ! -e node_modules/prisma \
     && test ! -e node_modules/@prisma/engines \

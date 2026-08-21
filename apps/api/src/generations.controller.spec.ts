@@ -27,7 +27,7 @@ describe('GenerationsController retry', () => {
       releaseJob: jest.fn().mockResolvedValue(undefined),
       reacquireJob: jest.fn().mockResolvedValue(undefined), releaseStorage: jest.fn().mockResolvedValue(undefined), acquireSse: jest.fn().mockResolvedValue(jest.fn().mockResolvedValue(undefined)),
     };
-    controller = new GenerationsController(prisma, queue, limits, quota, assets, lifecycle, events);
+    controller = new GenerationsController(prisma, queue, queue, limits, quota, assets, lifecycle, events);
   });
 
   it('requeues a failed job with its original source and mask', async () => {
@@ -121,7 +121,7 @@ describe('GenerationsController retry', () => {
       $transaction: jest.fn((callback: any) => callback(transaction)),
     };
     const createQuota: any = { reserveJobInTransaction: jest.fn().mockResolvedValue(undefined) };
-    const createController = new GenerationsController(createPrisma, queue, limits, createQuota, assets, lifecycle, events);
+    const createController = new GenerationsController(createPrisma, queue, queue, limits, createQuota, assets, lifecycle, events);
 
     await createController.create(user, { modelId, prompt: '  combine these images  ', mode: 'IMAGE_EDIT', sourceAssetIds: [sourceId, sourceId] });
 

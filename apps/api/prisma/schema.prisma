@@ -28,6 +28,8 @@ enum GenerationMode {
   TEXT_TO_IMAGE
   IMAGE_EDIT
   INPAINT
+  TEXT_TO_VIDEO
+  IMAGE_TO_VIDEO
 }
 
 enum JobStatus {
@@ -135,6 +137,7 @@ model Provider {
   encryptedApiKey   String
   encryptedHeaders  String?
   timeoutSeconds    Int       @default(180)
+  pollTimeoutSeconds Int      @default(900)
   enabled           Boolean   @default(true)
   archivedAt        DateTime?
   testCooldownUntil DateTime?
@@ -155,6 +158,7 @@ model Model {
   supportsInpaint    Boolean            @default(false)
   allowedSizes       Json
   allowedQualities   Json
+  allowedDurations   Json               @default("[]")
   maxImages          Int                @default(1)
   maxInputImages     Int                @default(1)
   defaults           Json
@@ -174,8 +178,10 @@ model UserGroup {
   id          String                @id @default(uuid())
   name        String                @unique
   description String?
-  quotaWindow String?
-  quotaImages Int?
+  quotaWindow        String?
+  quotaImages        Int?
+  videoQuotaWindow   String?
+  quotaVideoSeconds  Int?
   createdAt   DateTime              @default(now())
   updatedAt   DateTime              @updatedAt
   users       UserGroupMembership[]
@@ -273,6 +279,7 @@ model Asset {
   sizeBytes    BigInt
   width        Int?
   height       Int?
+  durationMs   Int?
   originalName String?
   note         String?
   contentHash  String?
@@ -297,8 +304,9 @@ model QuotaEvent {
   userId     String
   jobId      String
   modelId    String?
-  imageCount Int
-  kind       String
+  imageCount   Int      @default(0)
+  videoSeconds Int      @default(0)
+  kind         String
   createdAt  DateTime       @default(now())
   user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   job        GenerationJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)

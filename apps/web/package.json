@@ -1,6 +1,6 @@
 {
   "name": "@knewstudio/web",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "private": true,
   "description": "KnewStudio web client.",
   "license": "Apache-2.0",

@@ -5,7 +5,7 @@ describe('AdminController user statistics', () => {
     const prisma: any = {
       user: { findMany: jest.fn().mockResolvedValue([{ id: 'user-1', username: 'alice', displayName: null, role: 'USER', status: 'ACTIVE', mustChangePwd: false, createdAt: new Date(), updatedAt: new Date(), usage: { storageBytes: 4096n }, mfaCredential: null, groupMemberships: [], _count: { jobs: 4, conversations: 2, assets: 3 } }]) },
     };
-    const controller = new AdminController(prisma, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const controller = new AdminController(prisma, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
 
     const result = await controller.users();
 
@@ -28,7 +28,8 @@ describe('AdminController user statistics', () => {
         { id: 'another-job', data: { jobId: 'another-database-job' }, ...unrelated },
       ]),
     };
-    const controller = new AdminController(prisma, auth as any, {} as any, queue as any, { invalidate: jest.fn().mockResolvedValue(undefined) } as any, lifecycle as any);
+    const videoQueue = { getJobs: jest.fn().mockResolvedValue([]) };
+    const controller = new AdminController(prisma, auth as any, {} as any, queue as any, videoQueue as any, { invalidate: jest.fn().mockResolvedValue(undefined) } as any, lifecycle as any);
 
     await controller.userStatus({ id: 'admin-1' } as any, 'user-1', { status: 'DISABLED' });
 

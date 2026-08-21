@@ -88,6 +88,19 @@ describe('AssetsController', () => {
     expect(stream.pipe).toHaveBeenCalledWith(response);
   });
 
+  it('serves byte ranges for video seeking', async () => {
+    prisma.asset.findFirst.mockResolvedValue({ id: 'asset-1', userId: 'user-1', role: 'OUTPUT', deletedAt: null, shares: [], objectKey: 'user-1/clip.mp4', mimeType: 'video/mp4', sizeBytes: 100n });
+    const stream = { on: jest.fn().mockReturnThis(), pipe: jest.fn() };
+    storage.createReadStream = jest.fn(() => stream);
+    const response = { setHeader: jest.fn(), status: jest.fn().mockReturnThis(), destroy: jest.fn() } as any;
+
+    await controller.content(user, 'asset-1', response, { headers: { range: 'bytes=0-9' } } as any);
+
+    expect(response.status).toHaveBeenCalledWith(206);
+    expect(response.setHeader).toHaveBeenCalledWith('Content-Range', 'bytes 0-9/100');
+    expect(storage.createReadStream).toHaveBeenCalledWith('user-1/clip.mp4', { start: 0, end: 9 });
+  });
+
   it('offloads authenticated media to the internal Nginx location in production', async () => {
     process.env.MEDIA_X_ACCEL_REDIRECT = 'true';
     prisma.asset.findFirst.mockResolvedValue({ userId: 'user-1', role: 'OUTPUT', deletedAt: null, shares: [], objectKey: 'user-1/private image.png', mimeType: 'image/png', sizeBytes: 3n });

@@ -6,6 +6,8 @@ type StoredAsset = {
   width: number | null;
   height: number | null;
   mimeType: string;
+  mediaKind?: string;
+  durationMs?: number | null;
   sizeBytes: bigint;
   note?: string | null;
   deletedAt?: Date | null;
@@ -17,6 +19,7 @@ type StoredJob = {
   conversationId: string;
   status: string;
   mode: string;
+  mediaKind?: string;
   prompt: string;
   errorMessage: string | null;
   parameters: unknown;
@@ -29,6 +32,7 @@ export const generationJobSelect = {
   conversationId: true,
   status: true,
   mode: true,
+  mediaKind: true,
   prompt: true,
   errorMessage: true,
   parameters: true,
@@ -40,6 +44,8 @@ export const generationJobSelect = {
       width: true,
       height: true,
       mimeType: true,
+      mediaKind: true,
+      durationMs: true,
       sizeBytes: true,
       note: true,
       deletedAt: true,
@@ -48,10 +54,19 @@ export const generationJobSelect = {
   },
 } as const;
 
-function countParameter(value: unknown) {
+function publicParameters(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const count = (value as Record<string, unknown>).count;
-  return Number.isInteger(count) ? { count: Number(count) } : {};
+  const candidate = value as Record<string, unknown>;
+  const count = candidate.count;
+  const durationSeconds = candidate.durationSeconds;
+  const size = typeof candidate.size === 'string' ? candidate.size : undefined;
+  const quality = typeof candidate.quality === 'string' ? candidate.quality : undefined;
+  return {
+    ...(Number.isInteger(count) ? { count: Number(count) } : {}),
+    ...(Number.isInteger(durationSeconds) ? { durationSeconds: Number(durationSeconds) } : {}),
+    ...(size ? { size } : {}),
+    ...(quality ? { quality } : {}),
+  };
 }
 
 function displayName(value: unknown) {
@@ -66,9 +81,10 @@ export function serializeGenerationJob(job: StoredJob) {
     conversationId: job.conversationId,
     status: job.status,
     mode: job.mode,
+    mediaKind: job.mediaKind === 'VIDEO' ? 'VIDEO' : 'IMAGE',
     prompt: job.prompt,
     errorMessage: job.errorMessage,
-    parameters: countParameter(job.parameters),
+    parameters: publicParameters(job.parameters),
     modelSnapshot: { displayName: displayName(job.modelSnapshot) },
     assets: job.assets.map((asset) => ({
       id: asset.id,
@@ -76,6 +92,8 @@ export function serializeGenerationJob(job: StoredJob) {
       width: asset.width,
       height: asset.height,
       mimeType: asset.mimeType,
+      mediaKind: asset.mediaKind === 'VIDEO' ? 'VIDEO' : 'IMAGE',
+      durationMs: asset.durationMs ?? null,
       sizeBytes: asset.sizeBytes.toString(),
       note: asset.note ?? null,
       ...serializeAssetLinks(asset),

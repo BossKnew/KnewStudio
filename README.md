@@ -2,12 +2,12 @@
 
 [简体中文](README_zh.md)
 
-KnewStudio is a self-hosted image-generation workspace for teams. It supports OpenAI Images-compatible providers, text-to-image generation, full-image editing, masked inpainting, asset management, and an administration console with user groups and model permissions.
+KnewStudio is a self-hosted image and video generation workspace for teams. It supports OpenAI Images-compatible providers, OpenAI Videos / Seedance / Wan video adapters, text-to-image generation, full-image editing, masked inpainting, text-to-video, image-to-video, asset management, and an administration console with user groups and model permissions.
 
 ## Features
 
-- OpenAI Images-compatible provider and model configuration
-- Text-to-image generation, reference-image editing, and masked inpainting
+- OpenAI Images-compatible providers plus OpenAI Videos, Seedance, and Wan video adapters
+- Text-to-image generation, reference-image editing, masked inpainting, text-to-video, and image-to-video
 - Conversations, generation history, asset library, group-shared reference images, thumbnails, and storage quotas
 - User approval, user groups, model access control, and optional per-group generation quotas
 - Mandatory administrator MFA, TOTP, recovery codes, and session revocation
@@ -16,7 +16,9 @@ KnewStudio is a self-hosted image-generation workspace for teams. It supports Op
 - PostgreSQL, Redis, background job queues, and Docker Compose deployment
 - Chinese and English user interfaces
 
-The current release supports image generation only. Video adapter interfaces are reserved in the codebase but are not exposed as product features.
+Video jobs are asynchronous: the worker creates an upstream task, polls until it finishes, then stores the MP4. Administrators set each video model’s allowed aspect ratios, durations, and optional resolutions. Group video quotas are a sliding window of seconds per member, independent from image quotas.
+
+Local development of video thumbnails requires `ffmpeg` on the host. The Docker API image includes ffmpeg.
 
 ## Technology Stack
 

@@ -4,6 +4,7 @@ import { QuotaService } from './quota.service';
 import { StorageService } from './storage.service';
 
 type NormalizedImage = { path: string; sizeBytes: bigint; mimeType: string; width: number; height: number };
+type NormalizedVideo = { path: string; sizeBytes: bigint; mimeType: string; width: number | null; height: number | null; durationMs: number | null };
 
 function prismaErrorCode(error: unknown) {
   return error && typeof error === 'object' && 'code' in error ? (error as { code?: unknown }).code : undefined;
@@ -53,6 +54,7 @@ export class AssetLifecycleService {
           userId: input.userId,
           jobId: input.jobId,
           role: input.role,
+          mediaKind: 'IMAGE',
           objectKey: stored!.objectKey,
           mimeType: input.image.mimeType,
           sizeBytes: stored!.sizeBytes,
@@ -135,6 +137,59 @@ export class AssetLifecycleService {
       }
     }
     return null;
+  }
+
+  async persistVideo(input: { userId: string; jobId: string; video: NormalizedVideo; originalName?: string }) {
+    let thumbnail: Awaited<ReturnType<StorageService['createThumbnailFile']>> | undefined;
+    try { thumbnail = await this.storage.createVideoThumbnailFile(input.video.path); }
+    catch { thumbnail = undefined; }
+    try { await this.quota.reserveStorage(input.userId, input.video.sizeBytes); }
+    catch (error) {
+      await Promise.all([thumbnail ? this.storage.deleteStaged(thumbnail.path) : Promise.resolve()]);
+      throw error;
+    }
+    let stored: { objectKey: string; sizeBytes: bigint } | undefined;
+    let storedThumbnail: { objectKey: string; sizeBytes: bigint } | undefined;
+    try {
+      stored = await this.storage.saveStaged(input.userId, input.video.path, input.video.mimeType);
+      if (thumbnail) storedThumbnail = await this.storage.saveStaged(input.userId, thumbnail.path, thumbnail.mimeType);
+      return await this.prisma.$transaction(async (tx) => {
+        const asset = await tx.asset.create({ data: {
+          userId: input.userId,
+          jobId: input.jobId,
+          role: 'OUTPUT',
+          mediaKind: 'VIDEO',
+          objectKey: stored!.objectKey,
+          mimeType: input.video.mimeType,
+          sizeBytes: stored!.sizeBytes,
+          width: input.video.width,
+          height: input.video.height,
+          durationMs: input.video.durationMs,
+          originalName: input.originalName,
+        }});
+        const thumbnailAsset = storedThumbnail && thumbnail ? await tx.asset.create({ data: {
+          userId: input.userId,
+          jobId: input.jobId,
+          role: 'THUMBNAIL',
+          mediaKind: 'IMAGE',
+          objectKey: storedThumbnail.objectKey,
+          mimeType: thumbnail.mimeType,
+          sizeBytes: storedThumbnail.sizeBytes,
+          width: thumbnail.width,
+          height: thumbnail.height,
+          thumbnailForId: asset.id,
+        }}) : null;
+        return { ...asset, thumbnail: thumbnailAsset ? { id: thumbnailAsset.id, deletedAt: thumbnailAsset.deletedAt } : null };
+      });
+    } catch (error) {
+      await Promise.all([
+        thumbnail ? this.storage.deleteStaged(thumbnail.path).catch(() => undefined) : Promise.resolve(),
+        stored ? this.storage.delete(stored.objectKey).catch(() => undefined) : Promise.resolve(),
+        storedThumbnail ? this.storage.delete(storedThumbnail.objectKey).catch(() => undefined) : Promise.resolve(),
+      ]);
+      await this.quota.releaseStorage(input.userId, input.video.sizeBytes);
+      throw error;
+    }
   }
 
   async remove(userId: string, id: string) {

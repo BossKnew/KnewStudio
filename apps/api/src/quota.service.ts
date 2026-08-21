@@ -6,7 +6,7 @@ import { securityConfig } from './security-config';
 import { randomUUID } from 'node:crypto';
 import { ACTIVE_JOB_STATUSES } from './domain-constants';
 import type { AuthUser } from './common';
-import { evaluatePolicies, eventsInWindow, quotaPoliciesFromGroups, retryAfterSeconds, usedImages } from './generation-quota';
+import { evaluatePolicies, evaluateVideoPolicies, eventsInWindow, quotaPoliciesFromGroups, retryAfterSeconds, usedImages, videoQuotaPoliciesFromGroups } from './generation-quota';
 
 @Injectable()
 export class QuotaService implements OnModuleInit, OnModuleDestroy {
@@ -47,7 +47,7 @@ export class QuotaService implements OnModuleInit, OnModuleDestroy {
     tx: Prisma.TransactionClient,
     user: Pick<AuthUser, 'id' | 'role' | 'groupIds'>,
     imageCount: number,
-    context: { jobId: string; modelId?: string | null; kind: 'SUBMIT' | 'RETRY' },
+    context: { jobId: string; modelId?: string | null; kind: 'SUBMIT' | 'RETRY'; videoSeconds?: number },
   ) {
     const global = await tx.globalUsage.updateMany({
       where: { id: 'global', activeJobs: { lt: securityConfig.queuedJobsGlobal() } },
@@ -59,9 +59,11 @@ export class QuotaService implements OnModuleInit, OnModuleDestroy {
       data: { activeJobs: { increment: 1 } },
     });
     if (!result.count) throw this.exceeded('活动任务数量已达上限');
-    await this.assertImageQuota(tx, user, imageCount);
+    const videoSeconds = Math.max(0, Number(context.videoSeconds) || 0);
+    if (imageCount > 0) await this.assertImageQuota(tx, user, imageCount);
+    if (videoSeconds > 0) await this.assertVideoQuota(tx, user, videoSeconds);
     await tx.quotaEvent.create({
-      data: { userId: user.id, jobId: context.jobId, modelId: context.modelId ?? null, imageCount, kind: context.kind },
+      data: { userId: user.id, jobId: context.jobId, modelId: context.modelId ?? null, imageCount, videoSeconds, kind: context.kind },
     });
   }
 
@@ -74,14 +76,14 @@ export class QuotaService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async reacquireJob(user: Pick<AuthUser, 'id' | 'role' | 'groupIds'>, jobId: string, imageCount: number, modelId?: string | null) {
+  async reacquireJob(user: Pick<AuthUser, 'id' | 'role' | 'groupIds'>, jobId: string, imageCount: number, modelId?: string | null, videoSeconds = 0) {
     await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.generationJob.updateMany({
         where: { id: jobId, userId: user.id, status: 'FAILED', quotaReleased: true },
         data: { status: 'QUEUED', quotaReleased: false, errorCode: null, errorMessage: null, startedAt: null, finishedAt: null },
       });
       if (!claimed.count) throw new ConflictException('任务状态已变化，请刷新后重试');
-      await this.reserveJobInTransaction(tx, user, imageCount, { jobId, modelId, kind: 'RETRY' });
+      await this.reserveJobInTransaction(tx, user, imageCount, { jobId, modelId, kind: 'RETRY', videoSeconds });
     });
   }
 
@@ -91,22 +93,25 @@ export class QuotaService implements OnModuleInit, OnModuleDestroy {
       this.prisma.userUsage.findUnique({ where: { userId: user.id }, select: { storageBytes: true } }),
       user.groupIds.length ? this.prisma.userGroup.findMany({
         where: { id: { in: user.groupIds } },
-        select: { id: true, name: true, quotaWindow: true, quotaImages: true },
+        select: { id: true, name: true, quotaWindow: true, quotaImages: true, videoQuotaWindow: true, quotaVideoSeconds: true },
         orderBy: { name: 'asc' },
       }) : Promise.resolve([]),
     ]);
     const policies = user.role === 'ADMIN' ? [] : quotaPoliciesFromGroups(groups);
-    const maxWindow = policies.reduce((max, policy) => Math.max(max, policy.windowSeconds), 0);
+    const videoPolicies = user.role === 'ADMIN' ? [] : videoQuotaPoliciesFromGroups(groups);
+    const maxWindow = [...policies, ...videoPolicies].reduce((max, policy) => Math.max(max, policy.windowSeconds), 0);
     const events = maxWindow ? await this.prisma.quotaEvent.findMany({
       where: { userId: user.id, createdAt: { gt: new Date(now.getTime() - maxWindow * 1000) } },
-      select: { createdAt: true, imageCount: true },
+      select: { createdAt: true, imageCount: true, videoSeconds: true },
       orderBy: { createdAt: 'asc' },
     }) : [];
+    const imageEvents = events.map((event) => ({ createdAt: event.createdAt, imageCount: event.imageCount }));
+    const videoEvents = events.map((event) => ({ createdAt: event.createdAt, imageCount: event.videoSeconds, videoSeconds: event.videoSeconds }));
     return {
       storageBytes: usage?.storageBytes.toString() ?? '0',
       storageQuotaBytes: securityConfig.storageBytesPerUser().toString(),
       policies: policies.map((policy) => {
-        const inWindow = eventsInWindow(events, now, policy.windowSeconds);
+        const inWindow = eventsInWindow(imageEvents, now, policy.windowSeconds);
         const used = usedImages(inWindow);
         const remaining = Math.max(0, policy.images - used);
         const oldest = inWindow[0];
@@ -119,6 +124,22 @@ export class QuotaService implements OnModuleInit, OnModuleDestroy {
           remaining,
           resetAt: oldest ? new Date(oldest.createdAt.getTime() + policy.windowSeconds * 1000).toISOString() : null,
           retryAfterSeconds: remaining === 0 ? retryAfterSeconds(inWindow, policy.windowSeconds, policy.images, 1, now) : 0,
+        };
+      }),
+      videoPolicies: videoPolicies.map((policy) => {
+        const inWindow = eventsInWindow(videoEvents, now, policy.windowSeconds);
+        const used = usedImages(inWindow);
+        const remaining = Math.max(0, policy.seconds - used);
+        const oldest = inWindow[0];
+        return {
+          groupId: policy.groupId,
+          groupName: policy.name,
+          window: policy.window,
+          seconds: policy.seconds,
+          used,
+          remaining,
+          resetAt: oldest ? new Date(oldest.createdAt.getTime() + policy.windowSeconds * 1000).toISOString() : null,
+          retryAfterSeconds: remaining === 0 ? retryAfterSeconds(inWindow, policy.windowSeconds, policy.seconds, 1, now) : 0,
         };
       }),
     };
@@ -141,6 +162,25 @@ export class QuotaService implements OnModuleInit, OnModuleDestroy {
     });
     const result = evaluatePolicies(policies, events, imageCount, now);
     if (!result.ok) throw this.exceeded('生成张数已达上限', result.retryAfterSeconds);
+  }
+
+  private async assertVideoQuota(tx: Prisma.TransactionClient, user: Pick<AuthUser, 'id' | 'role' | 'groupIds'>, videoSeconds: number) {
+    if (user.role === 'ADMIN' || !user.groupIds.length) return;
+    const groups = await tx.userGroup.findMany({
+      where: { id: { in: user.groupIds } },
+      select: { id: true, name: true, videoQuotaWindow: true, quotaVideoSeconds: true },
+    });
+    const policies = videoQuotaPoliciesFromGroups(groups);
+    if (!policies.length) return;
+    const now = new Date();
+    const maxWindow = policies.reduce((max, policy) => Math.max(max, policy.windowSeconds), 0);
+    const events = await tx.quotaEvent.findMany({
+      where: { userId: user.id, createdAt: { gt: new Date(now.getTime() - maxWindow * 1000) } },
+      select: { createdAt: true, videoSeconds: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const result = evaluateVideoPolicies(policies, events, videoSeconds, now);
+    if (!result.ok) throw this.exceeded('视频生成秒数已达上限', result.retryAfterSeconds);
   }
 
   async acquireSse(userId: string) {

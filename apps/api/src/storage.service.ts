@@ -1,12 +1,16 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, open, rename, rm, stat } from 'node:fs/promises';
 import { dirname, extname, resolve, sep } from 'node:path';
 import sharp from 'sharp';
 import { ConcurrencyGate } from './concurrency-gate';
 import { securityConfig } from './security-config';
-import { MAX_IMAGE_BYTES, THUMBNAIL_MAX_EDGE, THUMBNAIL_QUALITY } from './domain-constants';
+import { MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, THUMBNAIL_MAX_EDGE, THUMBNAIL_QUALITY } from './domain-constants';
+
+const execFileAsync = promisify(execFile);
 
 const MAX_IMAGE_PIXELS = 8192 * 8192;
 
@@ -14,6 +18,7 @@ const MIME_EXT: Record<string, string> = {
   'image/png': '.png',
   'image/jpeg': '.jpg',
   'image/webp': '.webp',
+  'video/mp4': '.mp4',
 };
 
 sharp.cache(false);
@@ -71,6 +76,37 @@ export class StorageService implements OnModuleInit {
     return this.imageProcessing.run(() => this.createThumbnailUnlocked(this.resolveKey(objectKey)));
   }
 
+  async inspectVideoFile(path: string) {
+    this.assertStagingPath(path);
+    const file = await stat(path);
+    if (file.size > MAX_VIDEO_BYTES) throw new Error('视频不能超过 256 MiB');
+    if (file.size < 32) throw new Error('供应商返回了空的视频文件');
+    const mp4 = await isMp4File(path);
+    let width: number | null = null;
+    let height: number | null = null;
+    let durationMs: number | null = null;
+    try {
+      const info = videoInfoFromFfprobe(await probeVideo(path));
+      width = info.width;
+      height = info.height;
+      durationMs = info.durationMs;
+    } catch {
+      if (!mp4) throw new Error('供应商返回的文件不是有效 MP4 视频，或本机缺少 ffprobe 且无法校验文件头');
+    }
+    return { path, sizeBytes: BigInt(file.size), mimeType: 'video/mp4' as const, width, height, durationMs };
+  }
+
+  async createVideoThumbnailFile(inputPath: string) {
+    this.assertStagingPath(inputPath);
+    const framePath = await this.createStagingPath('.jpg');
+    try {
+      await execFileAsync('ffmpeg', ['-y', '-ss', '0', '-i', inputPath, '-frames:v', '1', '-q:v', '3', framePath], { timeout: 30_000, maxBuffer: 1024 * 1024 });
+      return await this.imageProcessing.run(() => this.createThumbnailUnlocked(framePath));
+    } finally {
+      await this.deleteStaged(framePath).catch(() => undefined);
+    }
+  }
+
   async resizeMaskFile(objectKey: string, width: number, height: number) {
     if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 8192 || height > 8192) throw new Error('遮罩目标尺寸无效');
     return this.imageProcessing.run(async () => {
@@ -100,7 +136,9 @@ export class StorageService implements OnModuleInit {
   }
 
   filePath(objectKey: string) { return this.resolveKey(objectKey); }
-  createReadStream(objectKey: string) { return createReadStream(this.resolveKey(objectKey)); }
+  createReadStream(objectKey: string, range?: { start: number; end: number }) {
+    return createReadStream(this.resolveKey(objectKey), range);
+  }
   async hashStaged(path: string) { this.assertStagingPath(path); return this.hashFile(path); }
   async hashObject(objectKey: string) { return this.hashFile(this.resolveKey(objectKey)); }
   async delete(objectKey: string) { await rm(this.resolveKey(objectKey), { force: true }); }
@@ -164,5 +202,41 @@ export class StorageService implements OnModuleInit {
     const hash = createHash('sha256');
     for await (const chunk of createReadStream(path)) hash.update(chunk);
     return hash.digest('hex');
+  }
+}
+
+export async function isMp4File(path: string) {
+  const handle = await open(path, 'r');
+  try {
+    const buffer = Buffer.alloc(12);
+    const { bytesRead } = await handle.read(buffer, 0, 12, 0);
+    if (bytesRead < 8) return false;
+    return buffer.toString('ascii', 4, 8) === 'ftyp';
+  } finally {
+    await handle.close();
+  }
+}
+
+export function videoInfoFromFfprobe(payload: unknown) {
+  const object = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload as Record<string, unknown> : undefined;
+  const streams = Array.isArray(object?.streams) ? object.streams : [];
+  const video = streams.find((item) => item && typeof item === 'object' && (item as Record<string, unknown>).codec_type === 'video') as Record<string, unknown> | undefined;
+  const width = Number(video?.width);
+  const height = Number(video?.height);
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 8192 || height > 8192) {
+    throw new Error('视频尺寸无效或超过 8192 像素');
+  }
+  const format = object?.format && typeof object.format === 'object' && !Array.isArray(object.format) ? object.format as Record<string, unknown> : undefined;
+  const duration = Number(format?.duration ?? video?.duration);
+  const durationMs = Number.isFinite(duration) && duration > 0 ? Math.round(duration * 1000) : null;
+  return { width, height, durationMs };
+}
+
+async function probeVideo(path: string) {
+  try {
+    const { stdout } = await execFileAsync('ffprobe', ['-v', 'error', '-print_format', 'json', '-show_streams', '-show_format', path], { timeout: 30_000, maxBuffer: 1024 * 1024 });
+    return JSON.parse(stdout);
+  } catch {
+    throw new Error('无法解析视频文件');
   }
 }
