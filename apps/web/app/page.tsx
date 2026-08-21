@@ -218,7 +218,7 @@ export default function StudioPage() {
 
   async function downloadConversation(id: string): Promise<DownloadResult> {
     const result = await api<{ items: DownloadAsset[]; total: number }>(`/conversations/${id}/output-assets`);
-    if (!result.items.length) throw new Error(t('当前会话没有可下载的生成图片'));
+    if (!result.items.length) throw new Error(t('当前会话没有可下载的生成素材'));
     return downloadFiles(result.items.map((item) => ({ url: item.contentUrl, name: item.downloadName })));
   }
 
@@ -266,6 +266,10 @@ export default function StudioPage() {
   }
 
   function selectReference(asset: Asset, generationPrompt?: string) {
+    if (asset.mediaKind === 'VIDEO' || asset.mimeType === 'video/mp4') {
+      setSyncError(t('视频不能作为参考图'));
+      return;
+    }
     setReferences((current) => {
       if (current.some((reference) => reference.kind === 'asset' && reference.asset.id === asset.id)) return current;
       if (current.length >= 8) {
@@ -333,9 +337,12 @@ function toLightboxImage(asset: Asset, t: (key: string) => string): LightboxImag
     id: asset.id,
     src: asset.contentUrl,
     alt: asset.role === 'OUTPUT' ? t('生成资产') : t('上传资产'),
-    kind: asset.role === 'OUTPUT' ? t('生成图片') : t('上传图片'),
+    kind: asset.mediaKind === 'VIDEO' ? (asset.role === 'OUTPUT' ? t('生成视频') : t('上传视频')) : (asset.role === 'OUTPUT' ? t('生成图片') : t('上传图片')),
+    mediaKind: asset.mediaKind ?? 'IMAGE',
+    mimeType: asset.mimeType,
     width: asset.width,
     height: asset.height,
+    durationMs: asset.durationMs,
     prompt: shared ? null : asset.generationPrompt,
     note: shared ? null : asset.note,
     sharedBy: asset.sharedBy?.displayName ?? null,

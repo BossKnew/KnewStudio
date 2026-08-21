@@ -7,8 +7,11 @@ export type LightboxImage = {
   src: string;
   alt: string;
   kind: string;
+  mediaKind?: 'IMAGE' | 'VIDEO';
+  mimeType?: string;
   width?: number | null;
   height?: number | null;
+  durationMs?: number | null;
   prompt?: string | null;
   note?: string | null;
   sharedBy?: string | null;
@@ -43,12 +46,14 @@ export default function ImageLightbox({
   }}>
     <section className="image-viewer" role="dialog" aria-modal="true" aria-labelledby="image-viewer-title">
       <button className="image-viewer-close" type="button" onClick={onClose} aria-label={t('关闭图片查看器')} title={t('关闭')}>×</button>
-      <div className="image-viewer-stage"><img src={image.src} alt={image.alt} /></div>
+      <div className="image-viewer-stage">{image.mediaKind === 'VIDEO' || image.mimeType === 'video/mp4'
+        ? <video src={image.src} controls playsInline poster={undefined} />
+        : <img src={image.src} alt={image.alt} />}</div>
       <aside className="image-viewer-details">
         <div>
           <p className="detail-label">{t('类型')}</p>
           <h2 id="image-viewer-title">{image.kind}</h2>
-          {image.width && image.height && <p className="muted">{image.width} × {image.height}</p>}
+          {image.width && image.height && <p className="muted">{image.width} × {image.height}{image.durationMs ? ` · ${(image.durationMs / 1000).toFixed(1)}s` : ''}</p>}
         </div>
         {image.sharedBy ? <div className="viewer-detail-block">
           <p className="detail-label">{t('分享信息')}</p>
@@ -63,7 +68,7 @@ export default function ImageLightbox({
             <p className={image.note ? 'viewer-copy' : 'muted'}>{image.note || t('暂无备注')}</p>
           </div>
         </>}
-        {onUseAsReference && <button className="button primary viewer-reference" type="button" onClick={onUseAsReference}>{t('设为下一张参考图')}</button>}
+        {onUseAsReference && image.mediaKind !== 'VIDEO' && image.mimeType !== 'video/mp4' && <button className="button primary viewer-reference" type="button" onClick={onUseAsReference}>{t('设为下一张参考图')}</button>}
       </aside>
     </section>
   </div>;

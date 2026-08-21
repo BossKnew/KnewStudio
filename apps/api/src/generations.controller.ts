@@ -12,15 +12,16 @@ import { z } from 'zod';
 import { accessibleModelWhere, canAccessModel } from './model-access';
 import { generationJobSelect, serializeGenerationJob } from './generation-response';
 import { AssetLifecycleService } from './asset-lifecycle.service';
-import { GENERATION_QUEUE_OPTIONS } from './domain-constants';
+import { GENERATION_QUEUE_OPTIONS, isVideoGenerationMode } from './domain-constants';
 import { GenerationEventsService } from './generation-events.service';
 import { GenerationLifecycleService } from './generation-lifecycle.service';
 import { serializeAssetLinks } from './asset-response';
 import { accessibleReferencedAssetWhere, accessibleSourceWhere } from './asset-access';
 
 const generationSchema = z.object({
-  prompt: safeText(8000), modelId: uuidSchema, mode: z.enum(['TEXT_TO_IMAGE', 'IMAGE_EDIT', 'INPAINT']).optional(),
+  prompt: safeText(8000), modelId: uuidSchema, mode: z.enum(['TEXT_TO_IMAGE', 'IMAGE_EDIT', 'INPAINT', 'TEXT_TO_VIDEO', 'IMAGE_TO_VIDEO']).optional(),
   size: z.string().max(64).optional(), quality: z.string().max(64).optional(), count: z.number().int().min(1).max(4).optional(),
+  durationSeconds: z.number().int().min(1).max(60).optional(),
   sourceAssetIds: z.array(uuidSchema).max(8).optional(), maskAssetId: uuidSchema.nullish(), conversationId: uuidSchema.nullish(),
 }).strict();
 
@@ -28,6 +29,7 @@ type GenerationParameters = {
   size?: string;
   quality?: string;
   count?: number;
+  durationSeconds?: number;
   sourceAssetIds?: string[];
   maskAssetId?: string | null;
 };
@@ -49,6 +51,7 @@ function readGenerationParameters(value: unknown): GenerationParameters {
     size: typeof candidate.size === 'string' ? candidate.size : undefined,
     quality: typeof candidate.quality === 'string' ? candidate.quality : undefined,
     count: typeof candidate.count === 'number' ? candidate.count : undefined,
+    durationSeconds: typeof candidate.durationSeconds === 'number' ? candidate.durationSeconds : undefined,
     sourceAssetIds: Array.isArray(candidate.sourceAssetIds) && candidate.sourceAssetIds.every((id) => typeof id === 'string') ? candidate.sourceAssetIds : undefined,
     maskAssetId: typeof candidate.maskAssetId === 'string' || candidate.maskAssetId === null ? candidate.maskAssetId : undefined,
   };
@@ -59,6 +62,7 @@ export class GenerationsController {
   constructor(
     private prisma: PrismaService,
     @InjectQueue('image-generation') private queue: Queue,
+    @InjectQueue('video-generation') private videoQueue: Queue,
     private limits: RateLimitService,
     private quota: QuotaService,
     private assets: AssetLifecycleService,
@@ -72,34 +76,44 @@ export class GenerationsController {
     await this.limits.consume('generation-user', user.id, securityConfig.generationLimit(), 600);
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
     if (!prompt || prompt.length > 8000) throw new BadRequestException('提示词长度必须为 1-8000 字符');
-    const model = await this.prisma.model.findFirst({ where: { id: body.modelId, enabled: true, mediaKind: 'IMAGE', provider: { enabled: true, archivedAt: null }, ...accessibleModelWhere(user) }, include: { provider: { select: { name: true } } } });
+    const model = await this.prisma.model.findFirst({ where: { id: body.modelId, enabled: true, provider: { enabled: true, archivedAt: null }, ...accessibleModelWhere(user) }, include: { provider: { select: { name: true } } } });
     if (!model) throw new BadRequestException('模型不可用');
-    const mode = body.mode ?? 'TEXT_TO_IMAGE';
-    if (!['TEXT_TO_IMAGE', 'IMAGE_EDIT', 'INPAINT'].includes(mode)) throw new BadRequestException('生成模式无效');
+    const videoModel = model.mediaKind === 'VIDEO';
+    const mode = body.mode ?? (videoModel ? 'TEXT_TO_VIDEO' : 'TEXT_TO_IMAGE');
+    if (videoModel !== isVideoGenerationMode(mode)) throw new BadRequestException('生成模式与模型类型不匹配');
+    if (!videoModel && !['TEXT_TO_IMAGE', 'IMAGE_EDIT', 'INPAINT'].includes(mode)) throw new BadRequestException('生成模式无效');
     if (mode === 'TEXT_TO_IMAGE' && !model.supportsGeneration) throw new BadRequestException('模型不支持文生图');
     if (mode === 'IMAGE_EDIT' && !model.supportsEdit) throw new BadRequestException('模型不支持图片编辑');
     if (mode === 'INPAINT' && !model.supportsInpaint) throw new BadRequestException('模型不支持局部重绘');
+    if (mode === 'TEXT_TO_VIDEO' && !model.supportsGeneration) throw new BadRequestException('模型不支持文生视频');
+    if (mode === 'IMAGE_TO_VIDEO' && !model.supportsEdit) throw new BadRequestException('模型不支持图生视频');
     const allowedSizes = model.allowedSizes as string[];
-    const allowedQualities = model.allowedQualities as string[];
+    const allowedQualities = (model.allowedQualities as string[]) ?? [];
+    const allowedDurations = Array.isArray(model.allowedDurations) ? (model.allowedDurations as number[]) : [];
     const defaults = readGenerationParameters(model.defaults);
     const size = body.size ?? defaults.size ?? allowedSizes[0];
     const quality = body.quality ?? defaults.quality ?? allowedQualities[0];
-    const count = Math.min(model.maxImages, Math.max(1, Number(body.count) || 1));
-    if (!allowedSizes.includes(size) || !allowedQualities.includes(quality)) throw new BadRequestException('尺寸或质量不受该模型支持');
+    const count = videoModel ? 1 : Math.min(model.maxImages, Math.max(1, Number(body.count) || 1));
+    const durationSeconds = videoModel ? (body.durationSeconds ?? defaults.durationSeconds ?? allowedDurations[0]) : undefined;
+    if (!allowedSizes.includes(size)) throw new BadRequestException(videoModel ? '比例不受该模型支持' : '尺寸或质量不受该模型支持');
+    if (allowedQualities.length ? !allowedQualities.includes(quality) : Boolean(body.quality)) throw new BadRequestException(videoModel ? '分辨率不受该模型支持' : '尺寸或质量不受该模型支持');
+    if (videoModel && (typeof durationSeconds !== 'number' || !allowedDurations.includes(durationSeconds))) throw new BadRequestException('时长不受该模型支持');
     const sourceIds = Array.isArray(body.sourceAssetIds) ? [...new Set(body.sourceAssetIds)] : [];
     if (sourceIds.length > 8) throw new BadRequestException('参考图最多支持 8 张');
     if (sourceIds.length > model.maxInputImages) throw new BadRequestException(`该模型最多支持 ${model.maxInputImages} 张参考图`);
-    if (mode === 'TEXT_TO_IMAGE' && sourceIds.length) throw new BadRequestException('文生图不支持参考图');
+    if ((mode === 'TEXT_TO_IMAGE' || mode === 'TEXT_TO_VIDEO') && sourceIds.length) throw new BadRequestException(mode === 'TEXT_TO_VIDEO' ? '文生视频不支持参考图' : '文生图不支持参考图');
     const assetIds = [...sourceIds, ...(body.maskAssetId ? [body.maskAssetId] : [])];
     const assets = assetIds.length ? await this.prisma.asset.findMany({ where: { id: { in: assetIds }, ...accessibleReferencedAssetWhere(user) } }) : [];
     if (assets.length !== new Set(assetIds).size) throw new BadRequestException('引用图片不存在');
-    if (mode !== 'TEXT_TO_IMAGE' && !sourceIds.length) throw new BadRequestException('编辑模式必须提供原图');
+    if (assets.some((asset) => asset.mediaKind === 'VIDEO')) throw new BadRequestException('视频不能作为参考图');
+    if (mode !== 'TEXT_TO_IMAGE' && mode !== 'TEXT_TO_VIDEO' && !sourceIds.length) throw new BadRequestException(mode === 'IMAGE_TO_VIDEO' ? '图生视频必须提供参考图' : '编辑模式必须提供原图');
     if (mode === 'INPAINT' && !body.maskAssetId) throw new BadRequestException('局部重绘必须提供遮罩');
+    if (videoModel && body.maskAssetId) throw new BadRequestException('视频生成不支持遮罩');
     let conversationId = body.conversationId;
     if (conversationId) {
       if (!await this.prisma.conversation.findFirst({ where: { id: conversationId, userId: user.id } })) throw new NotFoundException('会话不存在');
     }
-    const parameters = { size, quality, count, sourceAssetIds: sourceIds, maskAssetId: body.maskAssetId ?? null };
+    const parameters = { size, quality, count, ...(durationSeconds !== undefined ? { durationSeconds } : {}), sourceAssetIds: sourceIds, maskAssetId: body.maskAssetId ?? null };
     let job;
     try {
       const result = await this.prisma.$transaction(async (transaction) => {
@@ -111,10 +125,10 @@ export class GenerationsController {
           update: { usageCount: { increment: 1 }, lastUsedAt: promptUsedAt },
         });
         const created = await transaction.generationJob.create({ data: {
-          userId: user.id, conversationId: targetConversationId, modelId: model.id, mode, prompt, parameters, imageCount: count,
+          userId: user.id, conversationId: targetConversationId, modelId: model.id, mediaKind: videoModel ? 'VIDEO' : 'IMAGE', mode, prompt, parameters, imageCount: count,
           modelSnapshot: { displayName: model.displayName, upstreamModelId: model.upstreamModelId, providerName: model.provider.name },
         }});
-        await this.quota.reserveJobInTransaction(transaction, user, count, { jobId: created.id, modelId: model.id, kind: 'SUBMIT' });
+        await this.quota.reserveJobInTransaction(transaction, user, videoModel ? 0 : count, { jobId: created.id, modelId: model.id, kind: 'SUBMIT', videoSeconds: videoModel ? durationSeconds : 0 });
         if (body.maskAssetId) await transaction.asset.updateMany({ where: { id: body.maskAssetId, userId: user.id }, data: { jobId: created.id, role: 'MASK' } });
         return { created, targetConversationId };
       });
@@ -123,7 +137,7 @@ export class GenerationsController {
     } catch (error) { throw error; }
     try {
       await this.prisma.conversation.update({ where: { id: conversationId }, data: { updatedAt: new Date() } });
-      await this.queue.add('generate', { jobId: job.id }, { jobId: job.id, ...GENERATION_QUEUE_OPTIONS });
+      await (videoModel ? this.videoQueue : this.queue).add('generate', { jobId: job.id }, { jobId: job.id, ...GENERATION_QUEUE_OPTIONS });
       await this.lifecycle.publish(user.id, job.id);
     }
     catch (error) {
@@ -162,6 +176,7 @@ export class GenerationsController {
       size: parameters.size ?? null,
       quality: parameters.quality ?? null,
       count: Math.max(1, Number(parameters.count) || 1),
+      durationSeconds: parameters.durationSeconds ?? null,
       sourceAssets: sourceAssetIds.map((assetId) => {
         const asset = sourceById.get(assetId)!;
         const owned = asset.userId === user.id;
@@ -197,7 +212,8 @@ export class GenerationsController {
     const retryAssets = requiredAssetIds.length ? await this.prisma.asset.findMany({ where: { id: { in: requiredAssetIds }, ...accessibleReferencedAssetWhere(user) } }) : [];
     if (retryAssets.length !== new Set(requiredAssetIds).size) throw new BadRequestException(job.mode === 'INPAINT' ? '原任务的参考图或遮罩已不存在，无法重试' : '原任务的参考图已不存在，无法重试');
 
-    await this.quota.reacquireJob(user, job.id, job.imageCount || Math.max(1, Number(parameters.count) || 1), job.modelId);
+    const retryVideo = isVideoGenerationMode(job.mode);
+    await this.quota.reacquireJob(user, job.id, retryVideo ? 0 : (job.imageCount || Math.max(1, Number(parameters.count) || 1)), job.modelId, retryVideo ? (parameters.durationSeconds ?? 0) : 0);
     try {
       await this.assets.removeJobOutputs(user.id, job.id);
     } catch (error) {
@@ -206,7 +222,7 @@ export class GenerationsController {
     }
 
     try {
-      await this.queue.add('generate', { jobId: job.id }, { jobId: `retry-${job.id}-${Date.now()}`, ...GENERATION_QUEUE_OPTIONS });
+      await (retryVideo ? this.videoQueue : this.queue).add('generate', { jobId: job.id }, { jobId: `retry-${job.id}-${Date.now()}`, ...GENERATION_QUEUE_OPTIONS });
       await this.lifecycle.publish(user.id, job.id);
     } catch (error) {
       await this.lifecycle.finish(user.id, job.id, 'FAILED', { code: 'RETRY_QUEUE_FAILED', message: '重试任务提交失败' });

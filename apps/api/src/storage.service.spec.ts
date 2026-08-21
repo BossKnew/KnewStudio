@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { StorageService } from './storage.service';
+import { StorageService, videoInfoFromFfprobe } from './storage.service';
 
 describe('StorageService', () => {
   let root: string;
@@ -57,5 +57,12 @@ describe('StorageService', () => {
     const resizedMask = await service.resizeMaskFile(stored.objectKey, 800, 400);
     const metadata = await sharp(resizedMask).metadata();
     expect(metadata).toMatchObject({ width: 800, height: 400, format: 'png', hasAlpha: true });
+  });
+
+  it('reads video dimensions from ffprobe JSON', () => {
+    expect(videoInfoFromFfprobe({
+      streams: [{ codec_type: 'audio' }, { codec_type: 'video', width: 1280, height: 720, duration: '5.0' }],
+      format: { duration: '5.04' },
+    })).toEqual({ width: 1280, height: 720, durationMs: 5040 });
   });
 });

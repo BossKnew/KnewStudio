@@ -1,6 +1,6 @@
-import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Put, Query, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Put, Query, Req, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { CurrentUser, type AuthUser } from './common';
 import { PrismaService } from './prisma.service';
 import { StorageService } from './storage.service';
@@ -56,16 +56,17 @@ export class AssetsController {
   }
 
   @Get('assets')
-  async list(@CurrentUser() user: AuthUser, @Query('limit') rawLimit?: string, @Query('cursor') rawCursor?: string) {
+  async list(@CurrentUser() user: AuthUser, @Query('limit') rawLimit?: string, @Query('cursor') rawCursor?: string, @Query('mediaKind') rawKind?: string) {
     const limit = pageLimit(rawLimit, 40);
     const cursor = decodeCursor(rawCursor);
-    const where = { userId: user.id, role: { in: ['UPLOAD' as const, 'OUTPUT' as const] }, deletedAt: null, ...cursorWhere('createdAt', cursor) };
+    const mediaKind = rawKind === 'IMAGE' || rawKind === 'VIDEO' ? rawKind as 'IMAGE' | 'VIDEO' : undefined;
+    const where = { userId: user.id, role: { in: ['UPLOAD' as const, 'OUTPUT' as const] }, deletedAt: null, ...(mediaKind ? { mediaKind } : {}), ...cursorWhere('createdAt', cursor) };
     const [rows, total] = await Promise.all([this.prisma.asset.findMany({
       where,
       include: { job: { select: { prompt: true } }, thumbnail: { select: { id: true, deletedAt: true } }, shares: { select: { groupId: true } } },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
-    }), this.prisma.asset.count({ where: { userId: user.id, role: { in: ['UPLOAD', 'OUTPUT'] }, deletedAt: null } })]);
+    }), this.prisma.asset.count({ where: { userId: user.id, role: { in: ['UPLOAD', 'OUTPUT'] }, deletedAt: null, ...(mediaKind ? { mediaKind } : {}) } })]);
     const hasMore = rows.length > limit;
     const assets = rows.slice(0, limit);
     const last = assets.at(-1);
@@ -169,7 +170,7 @@ export class AssetsController {
   }
 
   @Get('assets/:id/content')
-  async content(@CurrentUser() user: AuthUser, @Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @Res() response: Response) {
+  async content(@CurrentUser() user: AuthUser, @Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @Res() response: Response, @Req() request?: Request) {
     const asset = await this.prisma.asset.findFirst({
       where: { id, deletedAt: null },
       select: {
@@ -182,10 +183,22 @@ export class AssetsController {
     response.setHeader('Content-Type', asset!.mimeType);
     response.setHeader('Cache-Control', 'private, max-age=3600');
     response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.setHeader('Accept-Ranges', 'bytes');
     if (process.env.MEDIA_X_ACCEL_REDIRECT === 'true') {
       const safeObjectKey = asset!.objectKey.split('/').map(encodeURIComponent).join('/');
       response.setHeader('X-Accel-Redirect', `/_protected_media/${safeObjectKey}`);
       response.end();
+      return;
+    }
+    const size = Number(asset!.sizeBytes);
+    const range = parseByteRange(request?.headers?.range, size);
+    if (range) {
+      response.status(206);
+      response.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${size}`);
+      response.setHeader('Content-Length', String(range.end - range.start + 1));
+      const stream = this.storage.createReadStream(asset!.objectKey, range);
+      stream.on('error', () => response.destroy());
+      stream.pipe(response);
       return;
     }
     response.setHeader('Content-Length', asset!.sizeBytes.toString());
@@ -232,13 +245,15 @@ export class AssetsController {
     createdAt: Date;
     group: { id: string; name: string };
     sharedBy: { displayName: string | null; username: string };
-    asset: { id: string; userId: string; role: string; mimeType: string; sizeBytes: bigint; width: number | null; height: number | null; deletedAt: Date | null; objectKey: string; note: string | null; thumbnail?: { id: string; deletedAt: Date | null } | null };
+    asset: { id: string; userId: string; role: string; mimeType: string; mediaKind?: string; durationMs?: number | null; sizeBytes: bigint; width: number | null; height: number | null; deletedAt: Date | null; objectKey: string; note: string | null; thumbnail?: { id: string; deletedAt: Date | null } | null };
   }, user: AuthUser): Record<string, unknown> {
     return {
       id: row.asset.id,
       shareId: row.id,
       role: row.asset.role,
       mimeType: row.asset.mimeType,
+      mediaKind: row.asset.mediaKind ?? 'IMAGE',
+      durationMs: row.asset.durationMs ?? null,
       width: row.asset.width,
       height: row.asset.height,
       sizeBytes: row.asset.sizeBytes.toString(),
@@ -256,6 +271,26 @@ export class AssetsController {
 
 function isMaskUpload(value: unknown) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value) && (value as Record<string, unknown>).role === 'MASK');
+}
+
+export function parseByteRange(header: unknown, size: number) {
+  if (typeof header !== 'string' || !header.startsWith('bytes=') || !Number.isInteger(size) || size <= 0) return null;
+  const spec = header.slice(6).split(',')[0]?.trim();
+  if (!spec) return null;
+  const [startRaw, endRaw] = spec.split('-');
+  let start: number;
+  let end: number;
+  if (startRaw === '') {
+    const suffix = Number(endRaw);
+    if (!Number.isInteger(suffix) || suffix <= 0) return null;
+    start = Math.max(0, size - suffix);
+    end = size - 1;
+  } else {
+    start = Number(startRaw);
+    end = endRaw === '' || endRaw === undefined ? size - 1 : Number(endRaw);
+  }
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end >= size || start > end) return null;
+  return { start, end };
 }
 
 function parseGroupId(raw: string) {

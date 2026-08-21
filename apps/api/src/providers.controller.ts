@@ -2,15 +2,22 @@ import { Body, ConflictException, Controller, Delete, Get, HttpException, HttpSt
 import { CurrentUser, Roles, safeErrorMessage, type AuthUser } from './common';
 import { CryptoService } from './crypto.service';
 import { PrismaService } from './prisma.service';
-import { MAX_ERROR_BYTES, SafeHttpService } from './safe-http.service';
+import { SafeHttpService } from './safe-http.service';
 import { parseBody, safeText } from './validation';
 import { z } from 'zod';
 import { normalizeProviderHeaders } from './provider-headers';
 import { providerRequestHeaders } from './provider-credentials';
-import { ACTIVE_JOB_STATUSES } from './domain-constants';
+import { ACTIVE_JOB_STATUSES, isVideoAdapterKind } from './domain-constants';
+import { createVideoAdapter, testModelsList } from './video-adapters';
+import { normalizeAdapterKind } from './provider-adapter';
 
 const headersSchema = z.record(z.string().max(128), z.string().max(4096));
-const providerCreateSchema = z.object({ name: safeText(64), baseUrl: z.string().max(2048), apiKey: z.string().min(1).max(16_384), headers: headersSchema.optional(), timeoutSeconds: z.number().int().min(10).max(600).optional(), enabled: z.boolean().optional() }).strict();
+const adapterKindSchema = z.enum(['openai-images', 'openai-videos', 'seedance', 'wan']);
+const providerCreateSchema = z.object({
+  name: safeText(64), baseUrl: z.string().max(2048), apiKey: z.string().min(1).max(16_384), headers: headersSchema.optional(),
+  adapterKind: adapterKindSchema.optional(), timeoutSeconds: z.number().int().min(10).max(1800).optional(),
+  pollTimeoutSeconds: z.number().int().min(10).max(3600).optional(), enabled: z.boolean().optional(),
+}).strict();
 const providerUpdateSchema = providerCreateSchema.partial().strict();
 
 function providerTestError(status: number) {
@@ -48,9 +55,11 @@ export class ProvidersController {
   async create(@CurrentUser() actor: AuthUser, @Body() raw: unknown) {
     const body = parseBody(providerCreateSchema, raw);
     const provider = await this.prisma.provider.create({ data: {
-      name: body.name.trim(), baseUrl: this.http.validateBaseUrl(body.baseUrl), adapterKind: 'openai-images', encryptedApiKey: this.crypto.encrypt(body.apiKey),
+      name: body.name.trim(), baseUrl: this.http.validateBaseUrl(body.baseUrl), adapterKind: normalizeAdapterKind(body.adapterKind), encryptedApiKey: this.crypto.encrypt(body.apiKey),
       encryptedHeaders: body.headers ? this.crypto.encrypt(JSON.stringify(normalizeProviderHeaders(body.headers))) : null,
-      timeoutSeconds: Math.min(600, Math.max(10, Number(body.timeoutSeconds) || 180)), enabled: body.enabled !== false,
+      timeoutSeconds: Math.min(1800, Math.max(10, Number(body.timeoutSeconds) || 180)),
+      pollTimeoutSeconds: Math.min(3600, Math.max(10, Number(body.pollTimeoutSeconds) || 900)),
+      enabled: body.enabled !== false,
     }});
     await this.audit(actor.id, 'provider.created', provider.id);
     return { id: provider.id };
@@ -64,7 +73,9 @@ export class ProvidersController {
       ...(body.baseUrl !== undefined ? { baseUrl: this.http.validateBaseUrl(body.baseUrl) } : {}),
       ...(body.apiKey ? { encryptedApiKey: this.crypto.encrypt(body.apiKey) } : {}),
       ...(body.headers !== undefined ? { encryptedHeaders: body.headers ? this.crypto.encrypt(JSON.stringify(normalizeProviderHeaders(body.headers))) : null } : {}),
+      ...(body.adapterKind !== undefined ? { adapterKind: normalizeAdapterKind(body.adapterKind) } : {}),
       ...(body.timeoutSeconds !== undefined ? { timeoutSeconds: body.timeoutSeconds } : {}),
+      ...(body.pollTimeoutSeconds !== undefined ? { pollTimeoutSeconds: body.pollTimeoutSeconds } : {}),
       ...(body.enabled !== undefined ? { enabled: Boolean(body.enabled) } : {}),
     }});
     await this.audit(actor.id, 'provider.updated', id);
@@ -87,16 +98,20 @@ export class ProvidersController {
     const provider = await this.prisma.provider.findUniqueOrThrow({ where: { id } });
     const headers = providerRequestHeaders(this.crypto, provider);
     try {
-      const response = await this.http.request(`${provider.baseUrl}/models`, { method: 'GET', headers, redirectPolicy: 'same-origin', signal: AbortSignal.timeout(Math.min(provider.timeoutSeconds, 30) * 1000) }, MAX_ERROR_BYTES);
-      const contentType = response.headers.get('content-type') ?? '';
-      let modelsPayload = false;
-      if (response.ok && contentType.includes('application/json')) {
-        try { modelsPayload = Array.isArray(JSON.parse(response.body.toString('utf8'))?.data); } catch { /* invalid JSON */ }
-      }
-      const ok = response.ok && modelsPayload;
-      const error = response.ok && !modelsPayload ? '接口返回的不是模型列表，请检查 Base URL 是否包含正确的 /v1' : providerTestError(response.status);
-      const result = { ok, status: response.status, ...(ok ? {} : { error }), cooldownUntil };
-      if (!ok) this.logger.warn(`供应商 ${id} 的 /models 测试失败：HTTP ${response.status}，content-type=${contentType || 'missing'}`);
+      const adapterKind = normalizeAdapterKind(provider.adapterKind);
+      const probed = isVideoAdapterKind(adapterKind) && adapterKind !== 'openai-videos'
+        ? await createVideoAdapter(adapterKind, {
+          http: this.http,
+          headers,
+          baseUrl: provider.baseUrl,
+          timeoutSeconds: provider.timeoutSeconds,
+          pollTimeoutSeconds: provider.pollTimeoutSeconds,
+        }).testConnection()
+        : await testModelsList({ http: this.http, headers, baseUrl: provider.baseUrl, timeoutSeconds: provider.timeoutSeconds });
+      const ok = Boolean(probed.ok);
+      const error = ok ? undefined : probed.message ?? (probed.status ? providerTestError(probed.status) : '供应商连接失败');
+      const result = { ok, status: probed.status, ...(ok ? {} : { error }), cooldownUntil };
+      if (!ok) this.logger.warn(`供应商 ${id} 测试失败：HTTP ${probed.status ?? 'n/a'} adapter=${adapterKind}`);
       await this.prisma.provider.update({ where: { id }, data: { lastTestOk: ok } });
       if (actor) await this.audit(actor.id, 'provider.tested', id);
       return result;

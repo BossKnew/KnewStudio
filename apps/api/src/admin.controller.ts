@@ -6,7 +6,7 @@ import { assertPassword, CurrentUser, Roles, type AuthUser } from './common';
 import { PrismaService } from './prisma.service';
 import { StorageService } from './storage.service';
 import { parseBody, passwordSchema, safeText, uuidSchema } from './validation';
-import { parseQuotaPair } from './generation-quota';
+import { parseQuotaPair, parseVideoQuotaPair } from './generation-quota';
 import { z } from 'zod';
 import { hashPassword } from './password-hash';
 import { AuthContextService } from './auth-context.service';
@@ -24,6 +24,8 @@ const userGroupSchema = z.object({
   description: safeText(300).optional().nullable(),
   quotaWindow: z.string().max(4).nullable().optional(),
   quotaImages: z.number().int().min(1).max(1_000_000).nullable().optional(),
+  videoQuotaWindow: z.string().max(4).nullable().optional(),
+  quotaVideoSeconds: z.number().int().min(1).max(1_000_000).nullable().optional(),
 }).strict();
 const userGroupsAssignmentSchema = z.object({ groupIds: z.array(uuidSchema).max(100) }).strict();
 
@@ -35,6 +37,7 @@ export class AdminController {
     private auth: AuthService,
     private storage: StorageService,
     @InjectQueue('image-generation') private queue: Queue,
+    @InjectQueue('video-generation') private videoQueue: Queue,
     private authContext: AuthContextService,
     private lifecycle: GenerationLifecycleService,
   ) {}
@@ -98,7 +101,10 @@ export class AdminController {
     let quota;
     try { quota = parseQuotaPair(body.quotaWindow ?? null, body.quotaImages ?? null); }
     catch (error) { throw new BadRequestException((error as Error).message); }
-    const group = await this.prisma.userGroup.create({ data: { name, description: body.description?.trim() || null, ...quota } });
+    let videoQuota;
+    try { videoQuota = parseVideoQuotaPair(body.videoQuotaWindow ?? null, body.quotaVideoSeconds ?? null); }
+    catch (error) { throw new BadRequestException((error as Error).message); }
+    const group = await this.prisma.userGroup.create({ data: { name, description: body.description?.trim() || null, ...quota, ...videoQuota } });
     await this.prisma.auditLog.create({ data: { actorId: actor.id, action: 'user-group.created', targetType: 'user-group', targetId: group.id, metadata: { name } } });
     return group;
   }
@@ -113,7 +119,12 @@ export class AdminController {
       try { quota = parseQuotaPair(body.quotaWindow ?? null, body.quotaImages ?? null); }
       catch (error) { throw new BadRequestException((error as Error).message); }
     }
-    const group = await this.prisma.userGroup.update({ where: { id }, data: { ...(name ? { name } : {}), ...(body.description !== undefined ? { description: body.description?.trim() || null } : {}), ...quota } });
+    let videoQuota = {};
+    if (body.videoQuotaWindow !== undefined || body.quotaVideoSeconds !== undefined) {
+      try { videoQuota = parseVideoQuotaPair(body.videoQuotaWindow ?? null, body.quotaVideoSeconds ?? null); }
+      catch (error) { throw new BadRequestException((error as Error).message); }
+    }
+    const group = await this.prisma.userGroup.update({ where: { id }, data: { ...(name ? { name } : {}), ...(body.description !== undefined ? { description: body.description?.trim() || null } : {}), ...quota, ...videoQuota } });
     await this.prisma.auditLog.create({ data: { actorId: actor.id, action: 'user-group.updated', targetType: 'user-group', targetId: id } });
     return group;
   }
@@ -205,7 +216,7 @@ export class AdminController {
     const rows = await this.prisma.quotaEvent.groupBy({
       by: ['userId'],
       where: { createdAt: { gte: from, lt: to } },
-      _sum: { imageCount: true },
+      _sum: { imageCount: true, videoSeconds: true },
       _count: { _all: true },
     });
     const users = rows.length ? await this.prisma.user.findMany({
@@ -222,6 +233,7 @@ export class AdminController {
           username: byId.get(row.userId)?.username ?? '',
           displayName: byId.get(row.userId)?.displayName ?? byId.get(row.userId)?.username ?? '',
           imageCount: row._sum.imageCount ?? 0,
+          videoSeconds: row._sum.videoSeconds ?? 0,
           events: row._count._all,
         }))
         .sort((left, right) => right.imageCount - left.imageCount || left.username.localeCompare(right.username)),
@@ -240,13 +252,16 @@ export class AdminController {
     });
     const queuedIds = new Set(jobs.filter((job) => job.status === 'QUEUED').map((job) => job.id));
     if (queuedIds.size > 0) {
-      const queuedJobs = await this.queue.getJobs(['waiting', 'delayed', 'prioritized'], 0, -1, true);
-      const matchingQueueJobs = queuedJobs.filter((queueJob) => queuedIds.has(String(queueJob.data?.jobId)));
-      for (let index = 0; index < matchingQueueJobs.length; index += 8) {
-        await Promise.all(matchingQueueJobs.slice(index, index + 8).map(async (queueJob) => {
-          try { await queueJob.remove(); }
-          catch { /* A worker may already have claimed or removed the job. */ }
-        }));
+      const queues = [this.queue, this.videoQueue].filter(Boolean);
+      for (const queue of queues) {
+        const queuedJobs = await queue.getJobs(['waiting', 'delayed', 'prioritized'], 0, -1, true);
+        const matchingQueueJobs = queuedJobs.filter((queueJob) => queuedIds.has(String(queueJob.data?.jobId)));
+        for (let index = 0; index < matchingQueueJobs.length; index += 8) {
+          await Promise.all(matchingQueueJobs.slice(index, index + 8).map(async (queueJob) => {
+            try { await queueJob.remove(); }
+            catch { /* A worker may already have claimed or removed the job. */ }
+          }));
+        }
       }
     }
     await this.prisma.generationJob.updateMany({

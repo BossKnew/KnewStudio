@@ -1,6 +1,6 @@
 {
   "name": "@knewstudio/api",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "private": true,
   "description": "KnewStudio API and background worker.",
   "license": "Apache-2.0",

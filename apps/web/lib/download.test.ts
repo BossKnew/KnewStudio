@@ -7,4 +7,5 @@ test('uses safe extensions for supported image content types', () => {
   assert.equal(extensionForMime('image/jpeg'), '.jpg');
   assert.equal(extensionForMime('image/webp'), '.webp');
   assert.equal(extensionForMime('application/octet-stream'), '.png');
+  assert.equal(extensionForMime('video/mp4'), '.mp4');
 });

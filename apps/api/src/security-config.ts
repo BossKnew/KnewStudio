@@ -18,6 +18,7 @@ export const securityConfig = {
   storageBytesPerUser: () => BigInt(intEnv('USER_STORAGE_QUOTA_GIB', 10, 1, 10_000)) * 1024n * 1024n * 1024n,
   ssePerUser: () => intEnv('MAX_SSE_CONNECTIONS_PER_USER', 3, 1, 20),
   workerConcurrency: () => intEnv('WORKER_CONCURRENCY', 1, 1, 32),
+  videoWorkerConcurrency: () => intEnv('VIDEO_WORKER_CONCURRENCY', 1, 1, 8),
   imageProcessingConcurrency: () => intEnv('IMAGE_PROCESSING_CONCURRENCY', 1, 1, 4),
 };
 

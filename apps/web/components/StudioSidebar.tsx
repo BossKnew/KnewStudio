@@ -99,6 +99,10 @@ export default function StudioSidebar({
         <span title={policy.groupName}>{policy.groupName}</span>
         <strong>{policy.used} / {policy.images} · {policy.window}</strong>
       </p>)}
+      {(usage.videoPolicies ?? []).map((policy) => <p className={'usage-row ' + (policy.remaining === 0 ? 'usage-full' : '')} key={'video-' + policy.groupId}>
+        <span title={policy.groupName}>{policy.groupName} · {t('视频')}</span>
+        <strong>{policy.used} / {policy.seconds}s · {policy.window}</strong>
+      </p>)}
     </section>}
     <div className="account-area">
       {accountOpen && <div className="account-popover" role="menu">

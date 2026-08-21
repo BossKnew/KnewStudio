@@ -8,13 +8,14 @@ describe('ModelsController', () => {
     ...overrides,
   });
 
-  const setup = (current = currentModel()) => {
+  const setup = (current = currentModel(), adapterKind = 'openai-images') => {
     const prisma: any = {
       model: {
         create: jest.fn().mockImplementation(({ data }) => ({ ...current, ...data })),
         findUniqueOrThrow: jest.fn().mockResolvedValue(current),
         update: jest.fn().mockImplementation(({ data }) => ({ ...current, ...data })),
       },
+      provider: { findUnique: jest.fn().mockResolvedValue({ adapterKind }) },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     return { controller: new ModelsController(prisma), prisma };
@@ -64,6 +65,27 @@ describe('ModelsController', () => {
 
     expect(prisma.model.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ allowedSizes: ['1024x1024', '1024x1536'], defaults: expect.objectContaining({ size: '1024x1024' }) }),
+    }));
+  });
+
+  it('stores video durations and locks count to 1', async () => {
+    const { controller, prisma } = setup(currentModel(), 'seedance');
+    await controller.create({ id: 'admin-1' } as any, {
+      providerId: '11111111-1111-4111-8111-111111111111',
+      displayName: 'Seedance',
+      upstreamModelId: 'doubao-seedance-2-0',
+      allowedSizes: ['16:9', '9:16'],
+      allowedQualities: ['720p'],
+      allowedDurations: [5, 10],
+      maxImages: 4,
+    });
+    expect(prisma.model.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        mediaKind: 'VIDEO',
+        maxImages: 1,
+        allowedDurations: [5, 10],
+        defaults: expect.objectContaining({ size: '16:9', durationSeconds: 5, count: 1 }),
+      }),
     }));
   });
 });

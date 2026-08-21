@@ -22,6 +22,7 @@ import { QuotaService } from './quota.service';
 import { MfaCryptoService } from './mfa-crypto.service';
 import { MfaService } from './mfa.service';
 import { GenerationProcessor } from './generation.processor';
+import { VideoGenerationProcessor } from './video-generation.processor';
 import { parseRedisUrl } from './redis-config';
 import { UploadAdmissionInterceptor } from './upload-admission.interceptor';
 import { AuthContextService } from './auth-context.service';
@@ -38,8 +39,8 @@ import { OptionLabelsController } from './option-labels.controller';
 const sharedProviders = [PrismaService, RedisService, RateLimitService, QuotaService, CryptoService, MfaCryptoService, MfaService, StorageService, AssetLifecycleService, SafeHttpService, AuthContextService, GenerationEventsService, GenerationLifecycleService, AuthService, PromptPolishService];
 
 @Module({
-  imports: [BullModule.forRoot({ connection: parseRedisUrl() }), BullModule.registerQueue({ name: 'image-generation' })],
+  imports: [BullModule.forRoot({ connection: parseRedisUrl() }), BullModule.registerQueue({ name: 'image-generation' }), BullModule.registerQueue({ name: 'video-generation' })],
   controllers: [HealthController, AuthController, AdminController, ProvidersController, ModelsController, GroupsController, UsageController, OptionLabelsController, AssetsController, ConversationsController, GenerationsController, PromptsController, PromptPolishAdminController, PromptPolishController],
-  providers: [...sharedProviders, GenerationProcessor, UploadAdmissionInterceptor, { provide: APP_GUARD, useClass: SessionGuard }],
+  providers: [...sharedProviders, GenerationProcessor, VideoGenerationProcessor, UploadAdmissionInterceptor, { provide: APP_GUARD, useClass: SessionGuard }],
 })
 export class AppModule {}

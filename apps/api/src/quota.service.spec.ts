@@ -12,7 +12,7 @@ describe('QuotaService atomic job counters', () => {
     expect(tx.globalUsage.updateMany).toHaveBeenCalledTimes(1);
     expect(tx.userUsage.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ userId: 'user-1' }) }));
     expect(tx.quotaEvent.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ userId: 'user-1', jobId: 'job-1', imageCount: 2, kind: 'SUBMIT' }),
+      data: expect.objectContaining({ userId: 'user-1', jobId: 'job-1', imageCount: 2, videoSeconds: 0, kind: 'SUBMIT' }),
     }));
   });
 
@@ -21,7 +21,7 @@ describe('QuotaService atomic job counters', () => {
     const tx: any = {
       globalUsage: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       userUsage: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
-      userGroup: { findMany: jest.fn().mockResolvedValue([{ id: 'intern', name: 'Intern', quotaWindow: '5h', quotaImages: 5 }]) },
+      userGroup: { findMany: jest.fn().mockResolvedValue([{ id: 'intern', name: 'Intern', quotaWindow: '5h', quotaImages: 5, videoQuotaWindow: null, quotaVideoSeconds: null }]) },
       quotaEvent: {
         findMany: jest.fn().mockResolvedValue([{ createdAt: new Date(now - 60_000), imageCount: 5 }]),
         create: jest.fn(),
@@ -31,6 +31,25 @@ describe('QuotaService atomic job counters', () => {
     await expect(service.reserveJobInTransaction(tx, { id: 'user-1', role: 'USER', groupIds: ['intern'] }, 1, { jobId: 'job-1', kind: 'SUBMIT' })).rejects.toMatchObject({
       status: 429,
       response: expect.objectContaining({ message: '生成张数已达上限' }),
+    });
+    expect(tx.quotaEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a video job that would exceed remaining seconds', async () => {
+    const now = Date.now();
+    const tx: any = {
+      globalUsage: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      userUsage: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      userGroup: { findMany: jest.fn().mockResolvedValue([{ id: 'intern', name: 'Intern', videoQuotaWindow: '1d', quotaVideoSeconds: 8 }]) },
+      quotaEvent: {
+        findMany: jest.fn().mockResolvedValue([{ createdAt: new Date(now - 60_000), videoSeconds: 5 }]),
+        create: jest.fn(),
+      },
+    };
+    const service = new QuotaService({} as any, {} as any);
+    await expect(service.reserveJobInTransaction(tx, { id: 'user-1', role: 'USER', groupIds: ['intern'] }, 0, { jobId: 'job-1', kind: 'SUBMIT', videoSeconds: 5 })).rejects.toMatchObject({
+      status: 429,
+      response: expect.objectContaining({ message: '视频生成秒数已达上限' }),
     });
     expect(tx.quotaEvent.create).not.toHaveBeenCalled();
   });

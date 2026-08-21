@@ -6,6 +6,7 @@ import { providerRequestHeaders } from './provider-credentials';
 import { safeErrorMessage } from './common';
 import {
   DEFAULT_PROMPT_POLISH_SYSTEM_PROMPT,
+  DEFAULT_PROMPT_POLISH_VIDEO_SYSTEM_PROMPT,
   MAX_PROMPT_POLISH_RESPONSE_BYTES,
   PROMPT_POLISH_SETTING_ID,
   PROMPT_POLISH_TEST_COOLDOWN_MS,
@@ -122,9 +123,9 @@ export class PromptPolishService {
     return this.adminSettings();
   }
 
-  async polish(prompt: string) {
+  async polish(prompt: string, mode: 'TEXT_TO_IMAGE' | 'TEXT_TO_VIDEO' = 'TEXT_TO_IMAGE') {
     const setting = await this.usableSetting();
-    return { polishedPrompt: await this.complete(setting, prompt) };
+    return { polishedPrompt: await this.complete(setting, prompt, mode) };
   }
 
   async test() {
@@ -165,7 +166,7 @@ export class PromptPolishService {
     return setting;
   }
 
-  private async complete(setting: PromptPolishSettingRow, prompt: string) {
+  private async complete(setting: PromptPolishSettingRow, prompt: string, mode: 'TEXT_TO_IMAGE' | 'TEXT_TO_VIDEO' = 'TEXT_TO_IMAGE') {
     const headers = providerRequestHeaders(this.crypto, setting);
     headers['Content-Type'] = 'application/json';
     let response;
@@ -178,7 +179,7 @@ export class PromptPolishService {
           body: JSON.stringify({
             model: setting.modelId,
             messages: [
-              { role: 'system', content: setting.systemPrompt?.trim() || DEFAULT_PROMPT_POLISH_SYSTEM_PROMPT },
+              { role: 'system', content: mode === 'TEXT_TO_VIDEO' ? DEFAULT_PROMPT_POLISH_VIDEO_SYSTEM_PROMPT : (setting.systemPrompt?.trim() || DEFAULT_PROMPT_POLISH_SYSTEM_PROMPT) },
               { role: 'user', content: prompt },
             ],
           }),

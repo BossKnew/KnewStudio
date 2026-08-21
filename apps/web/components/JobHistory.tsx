@@ -65,7 +65,7 @@ export default function JobHistory({ conversation, onLoadOlder, referenceIds, on
     <div className="jobs-heading">
       <h2>{conversation.title}</h2>
       <div className="job-toolbar">
-        <button className="button" type="button" disabled={downloadBusy} onClick={() => void downloadConversation()}>{downloadBusy ? t('下载中…') : t('下载本会话图片')}</button>
+        <button className="button" type="button" disabled={downloadBusy} onClick={() => void downloadConversation()}>{downloadBusy ? t('下载中…') : t('下载本会话素材')}</button>
         <button className="button danger" type="button" onClick={onDeleteConversation}>{t('删除会话')}</button>
       </div>
     </div>
@@ -88,8 +88,12 @@ export default function JobHistory({ conversation, onLoadOlder, referenceIds, on
         const referenceAsset: Asset = { ...jobAsset, contentUrl: jobAsset.contentUrl, role: 'OUTPUT', note: jobAsset.note ?? null, generationPrompt: job.prompt };
         const selected = referenceIds.includes(jobAsset.id);
         return <div className={'image-card job-image-card ' + (selected ? 'selected-reference' : '')} key={jobAsset.id}>
-          <button className="image-thumbnail" type="button" onClick={() => onOpenImage(referenceAsset)} aria-label={t('放大查看生成图片')}><img src={jobAsset.thumbnailUrl ?? jobAsset.contentUrl} loading="lazy" decoding="async" alt={job.prompt} /><span className="image-expand" aria-hidden="true">{t('放大')}</span></button>
-          <button className="button reference-button" type="button" onClick={() => onUseAsReference(referenceAsset, job.prompt)}>{selected ? t('已选为参考图') : t('设为参考图')}</button>
+          <button className="image-thumbnail" type="button" onClick={() => onOpenImage(referenceAsset)} aria-label={jobAsset.mediaKind === 'VIDEO' || jobAsset.mimeType === 'video/mp4' ? t('播放生成视频') : t('放大查看生成图片')}>
+            <img src={jobAsset.thumbnailUrl ?? jobAsset.contentUrl} loading="lazy" decoding="async" alt={job.prompt} />
+            {(jobAsset.mediaKind === 'VIDEO' || jobAsset.mimeType === 'video/mp4') && <span className="video-play-badge" aria-hidden="true">▶</span>}
+            <span className="image-expand" aria-hidden="true">{jobAsset.mediaKind === 'VIDEO' || jobAsset.mimeType === 'video/mp4' ? t('播放') : t('放大')}</span>
+          </button>
+          {jobAsset.mediaKind === 'VIDEO' || jobAsset.mimeType === 'video/mp4' ? null : <button className="button reference-button" type="button" onClick={() => onUseAsReference(referenceAsset, job.prompt)}>{selected ? t('已选为参考图') : t('设为参考图')}</button>}
         </div>;
       })}{Array.from({ length: legacyDeletedAssetCount(job) }, (_, index) => <DeletedAssetPlaceholder key={'legacy-deleted-' + index} />)}</div>
     </article>)}
@@ -99,6 +103,8 @@ export default function JobHistory({ conversation, onLoadOlder, referenceIds, on
 function modeLabel(mode: string, t: (key: string) => string) {
   if (mode === 'IMAGE_EDIT') return t('整图编辑');
   if (mode === 'INPAINT') return t('局部重绘');
+  if (mode === 'TEXT_TO_VIDEO') return t('文生视频');
+  if (mode === 'IMAGE_TO_VIDEO') return t('图生视频');
   return t('文生图');
 }
 

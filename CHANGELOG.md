@@ -2,6 +2,15 @@
 
 All notable changes to KnewStudio are documented here.
 
+## [0.2.0] - 2026-08-21
+
+- Video generation: text-to-video and image-to-video with aspect ratio, duration, and optional resolution.
+- Provider adapters for OpenAI Videos, Seedance (Volcengine Ark), and Wan (DashScope). Gateways that speak the OpenAI Videos protocol can reuse that adapter.
+- Studio switch between image and video; playback, download, regenerate, and retry.
+- Admin can choose an adapter, set model parameters, and configure a per-group sliding-window video quota in seconds.
+- Image quotas stay counted in images. Video jobs consume seconds, not image counts.
+- Prompt polishing supports text-to-video. Video outputs are stored as MP4 with first-frame thumbnails.
+
 ## [0.1.3] - 2026-08-20
 
 - Share assets with user groups; members can preview, download, and use them as edit or inpaint references.

@@ -16,7 +16,7 @@ const adminConfigSchema = z.object({
   systemPrompt: z.string().max(16_000).nullable().optional(),
 }).strict();
 
-const polishSchema = z.object({ prompt: safeText(8000), mode: z.literal('TEXT_TO_IMAGE') }).strict();
+const polishSchema = z.object({ prompt: safeText(8000), mode: z.enum(['TEXT_TO_IMAGE', 'TEXT_TO_VIDEO']) }).strict();
 
 @Roles('ADMIN')
 @Controller('admin/prompt-polish')
@@ -50,6 +50,6 @@ export class PromptPolishController {
   async polish(@CurrentUser() user: AuthUser, @Body() raw: unknown) {
     const body = parseBody(polishSchema, raw);
     await this.limits.consume('prompt-polish-user', user.id, securityConfig.generationLimit(), 600);
-    return this.service.polish(body.prompt);
+    return this.service.polish(body.prompt, body.mode);
   }
 }
