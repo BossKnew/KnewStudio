@@ -1,9 +1,33 @@
 import { BadRequestException } from '@nestjs/common';
-import { pinnedLookup, redirectSecurity, SafeHttpService } from './safe-http.service';
+import { outboundTimeouts, pinnedLookup, preferRoutableAddress, redirectSecurity, SafeHttpService, tlsServername } from './safe-http.service';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
+
+describe('outbound undici timeouts', () => {
+  it('disables headers and body timeouts when the caller supplies an AbortSignal', () => {
+    expect(outboundTimeouts(new AbortController().signal)).toEqual({ headersTimeout: 0, bodyTimeout: 0 });
+    expect(outboundTimeouts()).toEqual({});
+  });
+
+  it('aligns undici timeouts with an explicit request timeout', () => {
+    expect(outboundTimeouts(new AbortController().signal, 1_800_000)).toEqual({ headersTimeout: 1_800_000, bodyTimeout: 1_800_000 });
+  });
+});
+
+describe('outbound address selection', () => {
+  it('prefers IPv4 when both families are available', () => {
+    expect(preferRoutableAddress([
+      { address: '2001:db8::1', family: 6 },
+      { address: '203.0.113.10', family: 4 },
+    ])).toEqual([
+      { address: '203.0.113.10', family: 4 },
+      { address: '2001:db8::1', family: 6 },
+    ]);
+  });
+
+});
 
 describe('pinned DNS lookup', () => {
   it('returns an address array when Node requests all addresses', () => {
@@ -16,6 +40,23 @@ describe('pinned DNS lookup', () => {
     const callback = jest.fn();
     pinnedLookup({ address: '203.0.113.10', family: 4 })('example.com', {}, callback);
     expect(callback).toHaveBeenCalledWith(null, '203.0.113.10', 4);
+  });
+
+  it('returns every allowlisted address when Node requests all families', () => {
+    const callback = jest.fn();
+    pinnedLookup([
+      { address: '2001:db8::1', family: 6 },
+      { address: '203.0.113.10', family: 4 },
+    ])('example.com', { all: true }, callback);
+    expect(callback).toHaveBeenCalledWith(null, [
+      { address: '203.0.113.10', family: 4 },
+      { address: '2001:db8::1', family: 6 },
+    ]);
+  });
+
+  it('omits SNI for literal IP targets', () => {
+    expect(tlsServername('dashscope.aliyuncs.com')).toBe('dashscope.aliyuncs.com');
+    expect(tlsServername('203.0.113.10')).toBeUndefined();
   });
 });
 

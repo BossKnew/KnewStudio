@@ -15,7 +15,7 @@ const headersSchema = z.record(z.string().max(128), z.string().max(4096));
 const adapterKindSchema = z.enum(['openai-images', 'openai-videos', 'seedance', 'wan']);
 const providerCreateSchema = z.object({
   name: safeText(64), baseUrl: z.string().max(2048), apiKey: z.string().min(1).max(16_384), headers: headersSchema.optional(),
-  adapterKind: adapterKindSchema.optional(), timeoutSeconds: z.number().int().min(10).max(1800).optional(),
+  adapterKind: adapterKindSchema.optional(), timeoutSeconds: z.number().int().min(10).max(3600).optional(),
   pollTimeoutSeconds: z.number().int().min(10).max(3600).optional(), enabled: z.boolean().optional(),
 }).strict();
 const providerUpdateSchema = providerCreateSchema.partial().strict();
@@ -57,7 +57,7 @@ export class ProvidersController {
     const provider = await this.prisma.provider.create({ data: {
       name: body.name.trim(), baseUrl: this.http.validateBaseUrl(body.baseUrl), adapterKind: normalizeAdapterKind(body.adapterKind), encryptedApiKey: this.crypto.encrypt(body.apiKey),
       encryptedHeaders: body.headers ? this.crypto.encrypt(JSON.stringify(normalizeProviderHeaders(body.headers))) : null,
-      timeoutSeconds: Math.min(1800, Math.max(10, Number(body.timeoutSeconds) || 180)),
+      timeoutSeconds: Math.min(3600, Math.max(10, Number(body.timeoutSeconds) || 180)),
       pollTimeoutSeconds: Math.min(3600, Math.max(10, Number(body.pollTimeoutSeconds) || 900)),
       enabled: body.enabled !== false,
     }});

@@ -1,5 +1,5 @@
 import { createVideoAdapter, openaiVideoTaskId, seedanceTaskId, seedanceVideoUrl, wanApiRoot, wanParameters, wanStatus, wanTaskId, wanVideoUrl } from './video-adapters';
-import type { MediaGenerationRequest, VideoAdapterDeps } from './provider-adapter';
+import { connectionFailureDetail, isAbortTimeoutError, isProviderConnectionError, mapAbortTimeoutError, mapProviderRequestError, type MediaGenerationRequest, type VideoAdapterDeps } from './provider-adapter';
 
 function request(overrides: Partial<MediaGenerationRequest> = {}): MediaGenerationRequest {
   return {
@@ -146,5 +146,81 @@ describe('wan adapter', () => {
     const { http } = httpMock([{ ok: false, status: 401, json: { error: 'unauthorized' } }]);
     const adapter = createVideoAdapter('wan', deps(http, { baseUrl: 'https://dashscope.example/api/v1' }));
     await expect(adapter.testConnection()).resolves.toMatchObject({ ok: false, status: 401 });
+  });
+});
+
+describe('video adapter timeouts', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('uses the longer of generation and poll timeouts for create and download', async () => {
+    const timeoutSpy = jest.spyOn(AbortSignal, 'timeout');
+    const { http, calls } = httpMock([
+      { json: { id: 'video_1' } },
+      { json: { id: 'video_1', status: 'completed' } },
+      { headers: { 'content-type': 'video/mp4' }, body: Buffer.from('mp4data') },
+    ]);
+    const adapter = createVideoAdapter('openai-videos', deps(http, { timeoutSeconds: 900, pollTimeoutSeconds: 1800 }));
+    await adapter.createTask(request());
+    await adapter.collect('video_1', request());
+    expect(timeoutSpy.mock.calls.map((call) => call[0])).toEqual([1_800_000, 900_000, 1_800_000]);
+    expect(calls[0].init.timeoutMs).toBe(1_800_000);
+    expect(calls[1].init.timeoutMs).toBe(900_000);
+    expect(calls[2].init.timeoutMs).toBe(1_800_000);
+  });
+
+  it('keeps a 120s floor for video downloads when generation timeout is lower', async () => {
+    const timeoutSpy = jest.spyOn(AbortSignal, 'timeout');
+    const { http } = httpMock([
+      { json: { id: 'video_1', status: 'completed' } },
+      { headers: { 'content-type': 'video/mp4' }, body: Buffer.from('mp4data') },
+    ]);
+    const adapter = createVideoAdapter('openai-videos', deps(http, { timeoutSeconds: 30 }));
+    await adapter.collect('video_1', request());
+    expect(timeoutSpy.mock.calls.map((call) => call[0])).toEqual([30_000, 120_000]);
+  });
+
+  it('fails collect after pollTimeoutSeconds elapses', async () => {
+    let now = 0;
+    const { http } = httpMock([
+      { json: { id: 'video_1', status: 'in_progress' } },
+      { json: { id: 'video_1', status: 'in_progress' } },
+    ]);
+    const adapter = createVideoAdapter('openai-videos', deps(http, {
+      pollTimeoutSeconds: 60,
+      now: () => now,
+      sleep: async () => { now = 60_000; },
+    }));
+    await expect(adapter.collect('video_1', request())).rejects.toMatchObject({
+      noRetry: true,
+      providerFailure: { code: 'PROVIDER_TIMEOUT', message: expect.stringContaining('任务等待超时') },
+    });
+  });
+
+  it('maps AbortSignal timeout errors to a provider timeout failure', () => {
+    const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+    expect(isAbortTimeoutError(timeout)).toBe(true);
+    expect(isAbortTimeoutError(new Error('socket hang up'))).toBe(false);
+    expect(mapAbortTimeoutError(timeout)).toMatchObject({
+      noRetry: true,
+      providerFailure: { code: 'PROVIDER_TIMEOUT', message: expect.stringContaining('提高生成超时') },
+    });
+  });
+
+  it('does not treat a 10s TCP connect timeout as a generation timeout', () => {
+    const connect = Object.assign(new Error('Connect Timeout Error'), { code: 'UND_ERR_CONNECT_TIMEOUT' });
+    const wrapped = new Error('fetch failed', { cause: connect });
+    expect(isAbortTimeoutError(connect)).toBe(false);
+    expect(isProviderConnectionError(wrapped)).toBe(true);
+    expect(mapProviderRequestError(wrapped)).toMatchObject({
+      providerFailure: { code: 'PROVIDER_CONNECTION', message: expect.stringContaining('连接超时') },
+    });
+  });
+
+  it('labels a TLS handshake reset separately from a generation timeout', () => {
+    const reset = Object.assign(new Error('Client network socket disconnected before secure TLS connection was established'), { code: 'ECONNRESET' });
+    expect(connectionFailureDetail(reset)).toBe('TLS 握手被重置');
+    expect(mapProviderRequestError(new Error('fetch failed', { cause: reset }))).toMatchObject({
+      providerFailure: { code: 'PROVIDER_CONNECTION', message: expect.stringContaining('TLS 握手被重置') },
+    });
   });
 });
