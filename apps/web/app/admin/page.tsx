@@ -8,6 +8,7 @@ import OptionLabelsSettings from '@/components/OptionLabelsSettings';
 import { passwordRequirement } from '@/lib/password-policy';
 import type { CursorPage, SecurityUser } from '@/lib/studio-types';
 import { LanguageSwitcher, useI18n } from '@/lib/i18n';
+import Icon, { type IconName } from '@/components/Icon';
 
 type AdminView = 'users' | 'groups' | 'usage' | 'providers' | 'models' | 'labels' | 'prompt-polish' | 'security';
 type AdapterKind = 'openai-images' | 'openai-videos' | 'seedance' | 'wan';
@@ -353,14 +354,14 @@ export default function AdminPage() {
     <aside className="sidebar admin-sidebar">
       <h2 className="brand">KnewStudio</h2><p className="admin-nav-label">{t('管理后台')}</p>
       <nav className="sidebar-nav" aria-label={t('后台管理导航')}>
-        <AdminNavButton active={view === 'users'} onClick={() => setView('users')} icon="♙">{t('用户管理')}</AdminNavButton>
-        <AdminNavButton active={view === 'groups'} onClick={() => setView('groups')} icon="◎">{t('用户组')}</AdminNavButton>
-        <AdminNavButton active={view === 'usage'} onClick={() => setView('usage')} icon="▣">{t('用量')}</AdminNavButton>
-        <AdminNavButton active={view === 'providers'} onClick={() => setView('providers')} icon="◇">{t('添加供应商')}</AdminNavButton>
-        <AdminNavButton active={view === 'models'} onClick={() => setView('models')} icon="▦">{t('添加模型')}</AdminNavButton>
-        <AdminNavButton active={view === 'labels'} onClick={() => setView('labels')} icon="☰">{t('显示文案')}</AdminNavButton>
-        <AdminNavButton active={view === 'prompt-polish'} onClick={() => setView('prompt-polish')} icon="✦">{t('提示词润色')}</AdminNavButton>
-        <AdminNavButton active={view === 'security'} onClick={() => setView('security')} icon="◆">{t('安全')}</AdminNavButton>
+        <AdminNavButton active={view === 'users'} onClick={() => setView('users')} icon="users">{t('用户管理')}</AdminNavButton>
+        <AdminNavButton active={view === 'groups'} onClick={() => setView('groups')} icon="group">{t('用户组')}</AdminNavButton>
+        <AdminNavButton active={view === 'usage'} onClick={() => setView('usage')} icon="chart">{t('用量')}</AdminNavButton>
+        <AdminNavButton active={view === 'providers'} onClick={() => setView('providers')} icon="server">{t('添加供应商')}</AdminNavButton>
+        <AdminNavButton active={view === 'models'} onClick={() => setView('models')} icon="layers">{t('添加模型')}</AdminNavButton>
+        <AdminNavButton active={view === 'labels'} onClick={() => setView('labels')} icon="text">{t('显示文案')}</AdminNavButton>
+        <AdminNavButton active={view === 'prompt-polish'} onClick={() => setView('prompt-polish')} icon="sparkles">{t('提示词润色')}</AdminNavButton>
+        <AdminNavButton active={view === 'security'} onClick={() => setView('security')} icon="shield">{t('安全')}</AdminNavButton>
       </nav>
       <button className="button admin-return" onClick={() => router.push('/')}>{t('返回工作台')}</button>
     </aside>
@@ -479,8 +480,8 @@ export default function AdminPage() {
   </div>;
 }
 
-function AdminNavButton({ active, icon, onClick, children }: { active: boolean; icon: string; onClick: () => void; children: React.ReactNode }) {
-  return <button className={`button nav-button admin-nav-button ${active ? 'active' : ''}`} onClick={onClick}><span className="nav-button-label"><span aria-hidden="true">{icon}</span>{children}</span><span aria-hidden="true">›</span></button>;
+function AdminNavButton({ active, icon, onClick, children }: { active: boolean; icon: IconName; onClick: () => void; children: React.ReactNode }) {
+  return <button className={`button nav-button admin-nav-button ${active ? 'active' : ''}`} onClick={onClick}><span className="nav-button-label"><Icon name={icon} />{children}</span><Icon name="chevron-right" /></button>;
 }
 
 function ProviderRow({ provider, now, onEdit, onTest, onToggle, onDelete }: { provider: Provider; now: number; onEdit: (provider: Provider) => void; onTest: (provider: Provider) => Promise<void>; onToggle: (provider: Provider) => Promise<void>; onDelete: (provider: Provider) => Promise<void> }) {

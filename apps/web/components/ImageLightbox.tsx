@@ -1,6 +1,7 @@
 
 import { useEffect } from 'react';
 import { useI18n } from '@/lib/i18n';
+import Icon from '@/components/Icon';
 
 export type LightboxImage = {
   id: string;
@@ -45,7 +46,7 @@ export default function ImageLightbox({
     if (event.target === event.currentTarget) onClose();
   }}>
     <section className="image-viewer" role="dialog" aria-modal="true" aria-labelledby="image-viewer-title">
-      <button className="image-viewer-close" type="button" onClick={onClose} aria-label={t('关闭图片查看器')} title={t('关闭')}>×</button>
+      <button className="image-viewer-close" type="button" onClick={onClose} aria-label={t('关闭图片查看器')} title={t('关闭')}><Icon name="close" /></button>
       <div className="image-viewer-stage">{image.mediaKind === 'VIDEO' || image.mimeType === 'video/mp4'
         ? <video src={image.src} controls playsInline poster={undefined} />
         : <img src={image.src} alt={image.alt} />}</div>

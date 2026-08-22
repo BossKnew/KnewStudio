@@ -3,6 +3,7 @@ import { api, json } from '@/lib/api';
 import GenerationSettings from '@/components/GenerationSettings';
 import MaskCanvas from '@/components/MaskCanvas';
 import PromptHistory from '@/components/PromptHistory';
+import Icon from '@/components/Icon';
 import type { Asset, GenerationCreated, GenerationMode, GenerationReuse, MediaKind, ReferenceSelection, StudioModel } from '@/lib/studio-types';
 import type { OptionLabelMap } from '@/lib/option-labels';
 import { useI18n } from '@/lib/i18n';
@@ -248,9 +249,9 @@ export default function StudioComposer({ models, optionLabels = {}, conversation
     </section>}
     {hasSource && <div className="source-selection-list" aria-label={t('参考图列表')}>
       {references.map((reference, index) => <div className="source-selection" key={reference.key}>
-        {reference.kind === 'asset' ? <img src={reference.asset.thumbnailUrl ?? reference.asset.contentUrl} alt={t('已选参考图')} /> : <div className="source-file-icon" aria-hidden="true">▧</div>}
+        {reference.kind === 'asset' ? <img src={reference.asset.thumbnailUrl ?? reference.asset.contentUrl} alt={t('已选参考图')} /> : <Icon className="source-file-icon" name="image" />}
         <div className="source-selection-copy"><strong>{index + 1}. {reference.kind === 'asset' ? reference.asset.visibility === 'shared' ? t('组内参考图') : t('已选历史参考图') : reference.file.name}</strong><span className="muted">{reference.kind === 'asset' ? reference.asset.visibility === 'shared' ? t('组内素材') : t('已保存图片') : t('本地图片')}</span></div>
-        <button className="icon-button" type="button" onClick={() => removeReference(reference.key)} aria-label={t('移除参考图')} title={t('移除')}>×</button>
+        <button className="icon-button" type="button" onClick={() => removeReference(reference.key)} aria-label={t('移除参考图')} title={t('移除')}><Icon name="close" /></button>
       </div>)}
       <p className="muted reference-limit">{t('参考图数量')}：{references.length}/{maxInputImages}</p>
     </div>}

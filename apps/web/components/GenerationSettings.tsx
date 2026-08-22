@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { useI18n } from '@/lib/i18n';
 import { optionLabelFor, type OptionLabelMap } from '@/lib/option-labels';
 import type { MediaKind } from '@/lib/studio-types';
+import Icon from '@/components/Icon';
 
 type GenerationSettingsProps = {
   kind?: MediaKind;
@@ -85,9 +86,7 @@ export default function GenerationSettings({
       disabled={disabled}
       onClick={() => setOpen((current) => !current)}
     >
-      <svg className="generation-settings-icon" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6" />
-      </svg>
+      <Icon className="generation-settings-icon" name="sliders" />
       {video ? <>
         <span>{size ? labelOf(size) : '—'}</span>
         {duration ? <><span className="generation-settings-separator">|</span><span>{durationLabel(duration)}</span></> : null}
@@ -97,7 +96,7 @@ export default function GenerationSettings({
         <span>{quality ? labelOf(quality) : '—'}</span><span className="generation-settings-separator">|</span>
         <span>{count}</span>
       </>}
-      <span className={`generation-settings-chevron ${open ? 'open' : ''}`} aria-hidden="true">⌄</span>
+      <Icon className={`generation-settings-chevron ${open ? 'open' : ''}`} name="chevron-down" />
     </button>
 
     {open && <section className="generation-settings-popover" id={panelId} aria-label={t('生成设置选项')}>

@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { boundedCanvasSize } from '@/lib/mask-canvas';
 import { useI18n } from '@/lib/i18n';
+import Icon from '@/components/Icon';
 type Point = { x: number; y: number };
 
 export default function MaskCanvas({ imageSource, onMask }: { imageSource: File | string; onMask: (file: File | null) => void }) {
@@ -142,7 +143,7 @@ export default function MaskCanvas({ imageSource, onMask }: { imageSource: File 
   return <section className="mask-editor-section stack" aria-label={t('局部重绘遮罩编辑器')}>
     <div className="mask-editor-heading">
       <div><strong>{t('涂抹需要重绘的区域')}</strong><p className="muted">{t('青色高亮区域将被替换，未涂抹区域会尽量保留。')}</p></div>
-      {maskReady && <span className="mask-ready">✓ {t('遮罩已就绪')}</span>}
+      {maskReady && <span className="mask-ready"><Icon name="check" />{t('遮罩已就绪')}</span>}
     </div>
     {loadError && <p className="error">{loadError}</p>}
     <div className="mask-editor">
