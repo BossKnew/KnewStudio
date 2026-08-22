@@ -1,6 +1,6 @@
 # KnewStudio
 
-[English](README.md)
+[English](README.md) | 简体中文
 
 KnewStudio 是一个面向团队的自托管图片与视频生成工作台。它支持 OpenAI Images 兼容供应商、OpenAI Videos / Seedance / Wan 视频适配器、文生图、整图编辑、蒙版局部重绘、文生视频、图生视频、素材管理，以及带用户组和模型权限的管理后台。
 
