@@ -2,7 +2,7 @@
 
 All notable changes to KnewStudio are documented here.
 
-## [Unreleased]
+## [0.2.2] - 2026-08-22
 
 - Prompt polishing supports image editing: admins can enable it per model, and image-edit reference images are sent to the polishing model as part of the request.
 - Admin can configure multiple prompt polishing providers; only one can be enabled at a time, and the enabled one serves all polishing requests.
