@@ -1,12 +1,12 @@
 ## KnewStudio v0.2.2
 
-v0.2.2 为提示词润色带来图片编辑支持，并将润色配置扩展为多供应商。
+v0.2.2 adds image-edit support to prompt polishing and extends the polishing setup to multiple providers.
 
 ### ✨ Highlights
 
-* 提示词润色支持整图编辑：参考图随提示词一并发送给润色模型，使用专用内置系统提示词，管理员可按供应商启用
-* 提示词润色可配置多个供应商，同时仅启用一个，整站润色使用启用中的配置；后台新增配置列表，支持编辑、测试、启用/停用与删除
+* Prompt polishing now supports image editing: the reference image is sent to the polishing model together with the prompt, using a dedicated built-in system prompt; admins can enable it per provider
+* Multiple prompt polishing providers can be configured, with only one enabled at a time; the enabled one serves all polishing requests. The admin panel gains a provider list with edit, test, enable/disable, and delete
 
-有数据库变更（新增 `supportsImageEdit`、`name` 字段），`docker compose up -d --build` 启动时会自动应用迁移，部署方式不变。
+This release includes database changes (new `supportsImageEdit` and `name` columns); they are applied automatically when the stack starts with `docker compose up -d --build`. Deployment otherwise unchanged.
 
 **Full Changelog:** https://github.com/BossKnew/KnewStudio/compare/v0.2.1...v0.2.2
