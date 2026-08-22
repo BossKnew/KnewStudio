@@ -116,6 +116,7 @@ model SystemSetting {
 
 model PromptPolishSetting {
   id                String    @id
+  name              String
   providerName      String
   baseUrl           String
   encryptedApiKey   String
@@ -123,6 +124,7 @@ model PromptPolishSetting {
   timeoutSeconds    Int       @default(60)
   enabled           Boolean   @default(true)
   systemPrompt      String?   @db.Text
+  supportsImageEdit Boolean   @default(false)
   testCooldownUntil DateTime?
   lastTestOk        Boolean?
   createdAt         DateTime  @default(now())

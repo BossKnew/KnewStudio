@@ -1,14 +1,18 @@
 import { BadRequestException, HttpException, HttpStatus, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { CryptoService } from './crypto.service';
 import { PrismaService } from './prisma.service';
+import { StorageService } from './storage.service';
 import { MAX_ERROR_BYTES, SafeHttpService } from './safe-http.service';
 import { providerRequestHeaders } from './provider-credentials';
-import { safeErrorMessage } from './common';
+import { safeErrorMessage, type AuthUser } from './common';
+import { accessibleSourceWhere } from './asset-access';
+import { fileToDataUrl } from './image-data-url';
 import {
+  DEFAULT_PROMPT_POLISH_IMAGE_EDIT_SYSTEM_PROMPT,
   DEFAULT_PROMPT_POLISH_SYSTEM_PROMPT,
   DEFAULT_PROMPT_POLISH_VIDEO_SYSTEM_PROMPT,
   MAX_PROMPT_POLISH_RESPONSE_BYTES,
-  PROMPT_POLISH_SETTING_ID,
   PROMPT_POLISH_TEST_COOLDOWN_MS,
   PROMPT_POLISH_TEST_PROMPT,
 } from './prompt-polish.constants';
@@ -16,6 +20,7 @@ import {
 const MAX_SYSTEM_PROMPT_LENGTH = 16_000;
 
 type PromptPolishConfigInput = {
+  name?: string;
   providerName: string;
   baseUrl: string;
   apiKey?: string;
@@ -23,10 +28,12 @@ type PromptPolishConfigInput = {
   timeoutSeconds?: number;
   enabled?: boolean;
   systemPrompt?: string | null;
+  supportsImageEdit?: boolean;
 };
 
 type PromptPolishSettingRow = {
   id: string;
+  name: string;
   providerName: string;
   baseUrl: string;
   encryptedApiKey: string;
@@ -34,6 +41,23 @@ type PromptPolishSettingRow = {
   timeoutSeconds: number;
   enabled: boolean;
   systemPrompt: string | null;
+  supportsImageEdit: boolean;
+  testCooldownUntil: Date | null;
+  lastTestOk: boolean | null;
+};
+
+export type PromptPolishAdminItem = {
+  id: string;
+  name: string;
+  providerName: string;
+  baseUrl: string;
+  modelId: string;
+  timeoutSeconds: number;
+  enabled: boolean;
+  systemPrompt: string;
+  supportsImageEdit: boolean;
+  usingDefaultSystemPrompt: boolean;
+  hasApiKey: boolean;
   testCooldownUntil: Date | null;
   lastTestOk: boolean | null;
 };
@@ -46,129 +70,164 @@ export class PromptPolishService {
     private prisma: PrismaService,
     private crypto: CryptoService,
     private http: SafeHttpService,
+    private storage: StorageService,
   ) {}
 
-  async adminSettings() {
-    const setting = await this.prisma.promptPolishSetting.findUnique({ where: { id: PROMPT_POLISH_SETTING_ID } });
-    if (!setting) {
-      return {
-        configured: false,
-        providerName: '',
-        baseUrl: '',
-        modelId: '',
-        timeoutSeconds: 60,
-        enabled: false,
-        systemPrompt: '',
-        usingDefaultSystemPrompt: true,
-        apiKeyMasked: '',
-        hasApiKey: false,
-        testCooldownUntil: null,
-        lastTestOk: null,
-      };
-    }
-    return {
-      configured: Boolean(setting.encryptedApiKey),
-      providerName: setting.providerName,
-      baseUrl: setting.baseUrl,
-      modelId: setting.modelId,
-      timeoutSeconds: setting.timeoutSeconds,
-      enabled: setting.enabled,
-      systemPrompt: setting.systemPrompt ?? '',
-      usingDefaultSystemPrompt: !setting.systemPrompt?.trim(),
-      apiKeyMasked: setting.encryptedApiKey ? '••••••••' : '',
-      hasApiKey: Boolean(setting.encryptedApiKey),
-      testCooldownUntil: setting.testCooldownUntil,
-      lastTestOk: setting.lastTestOk,
-    };
+  async list() {
+    const rows = await this.prisma.promptPolishSetting.findMany({ orderBy: { createdAt: 'asc' } });
+    return { items: rows.map((row) => this.toAdminItem(row)) };
   }
 
-  async save(input: PromptPolishConfigInput) {
-    const existing = await this.prisma.promptPolishSetting.findUnique({ where: { id: PROMPT_POLISH_SETTING_ID } });
+  async save(input: PromptPolishConfigInput, id?: string) {
+    const name = input.name?.trim();
+    if (!name) throw new BadRequestException('供应商名称必填');
     const suppliedApiKey = input.apiKey?.trim();
-    const encryptedApiKey = suppliedApiKey ? this.crypto.encrypt(suppliedApiKey) : existing?.encryptedApiKey;
-    if (!encryptedApiKey) throw new BadRequestException('提示词润色 API Key 必填');
     const providerName = input.providerName.trim();
     const modelId = input.modelId.trim();
     const baseUrl = this.http.validateBaseUrl(input.baseUrl);
     const timeoutSeconds = Math.min(600, Math.max(10, Number(input.timeoutSeconds) || 60));
-    const systemPrompt = input.systemPrompt === undefined
-      ? existing?.systemPrompt ?? null
-      : typeof input.systemPrompt === 'string' && input.systemPrompt.trim()
-        ? input.systemPrompt.trim().slice(0, MAX_SYSTEM_PROMPT_LENGTH)
-        : null;
-    await this.prisma.promptPolishSetting.upsert({
-      where: { id: PROMPT_POLISH_SETTING_ID },
-      create: {
-        id: PROMPT_POLISH_SETTING_ID,
-        providerName,
-        baseUrl,
-        encryptedApiKey,
-        modelId,
-        timeoutSeconds,
-        enabled: input.enabled !== false,
-        systemPrompt,
-      },
-      update: {
+    const systemPrompt = typeof input.systemPrompt === 'string' && input.systemPrompt.trim()
+      ? input.systemPrompt.trim().slice(0, MAX_SYSTEM_PROMPT_LENGTH)
+      : null;
+
+    if (id) {
+      const existing = await this.prisma.promptPolishSetting.findUnique({ where: { id } });
+      if (!existing) throw new BadRequestException('配置不存在');
+      const encryptedApiKey = suppliedApiKey ? this.crypto.encrypt(suppliedApiKey) : existing.encryptedApiKey;
+      if (!encryptedApiKey) throw new BadRequestException('提示词润色 API Key 必填');
+      const updateData = {
+        name,
         providerName,
         baseUrl,
         encryptedApiKey,
         modelId,
         timeoutSeconds,
         ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
-        systemPrompt,
+        ...(input.supportsImageEdit !== undefined ? { supportsImageEdit: input.supportsImageEdit } : {}),
+        systemPrompt: input.systemPrompt === undefined ? existing.systemPrompt : systemPrompt,
         testCooldownUntil: null,
         lastTestOk: null,
-      },
+      };
+      const updated = await this.prisma.$transaction(async (tx) => {
+        if (input.enabled === true) {
+          await tx.promptPolishSetting.updateMany({ where: { id: { not: id }, enabled: true }, data: { enabled: false } });
+        }
+        return tx.promptPolishSetting.update({ where: { id }, data: updateData });
+      });
+      return this.toAdminItem(updated);
+    }
+
+    const encryptedApiKey = suppliedApiKey ? this.crypto.encrypt(suppliedApiKey) : undefined;
+    if (!encryptedApiKey) throw new BadRequestException('提示词润色 API Key 必填');
+    const enabled = input.enabled !== false;
+    const createData = {
+      id: randomUUID(),
+      name,
+      providerName,
+      baseUrl,
+      encryptedApiKey,
+      modelId,
+      timeoutSeconds,
+      enabled,
+      systemPrompt,
+      supportsImageEdit: input.supportsImageEdit === true,
+    };
+    const created = await this.prisma.$transaction(async (tx) => {
+      if (enabled) {
+        await tx.promptPolishSetting.updateMany({ where: { enabled: true }, data: { enabled: false } });
+      }
+      return tx.promptPolishSetting.create({ data: createData });
     });
-    return this.adminSettings();
+    return this.toAdminItem(created);
   }
 
-  async polish(prompt: string, mode: 'TEXT_TO_IMAGE' | 'TEXT_TO_VIDEO' = 'TEXT_TO_IMAGE') {
+  async remove(id: string) {
+    const result = await this.prisma.promptPolishSetting.deleteMany({ where: { id } });
+    if (!result.count) throw new BadRequestException('配置不存在');
+    return { ok: true };
+  }
+
+  async polish(user: AuthUser, prompt: string, mode: 'TEXT_TO_IMAGE' | 'IMAGE_EDIT' | 'TEXT_TO_VIDEO' = 'TEXT_TO_IMAGE', sourceAssetId?: string) {
     const setting = await this.usableSetting();
-    return { polishedPrompt: await this.complete(setting, prompt, mode) };
+    let imageDataUrl: string | undefined;
+    if (mode === 'IMAGE_EDIT') {
+      if (!setting.supportsImageEdit) throw new BadRequestException('该模型未启用图片编辑提示词润色，请联系管理员');
+      if (!sourceAssetId) throw new BadRequestException('图片编辑提示词润色需要参考图');
+      const asset = await this.prisma.asset.findFirst({
+        where: { id: sourceAssetId, ...accessibleSourceWhere(user) },
+        select: { objectKey: true, mimeType: true },
+      });
+      if (!asset) throw new BadRequestException('引用图片不存在');
+      imageDataUrl = await fileToDataUrl(this.storage.filePath(asset.objectKey), asset.mimeType);
+    } else if (sourceAssetId) {
+      throw new BadRequestException('参考图仅用于图片编辑提示词润色');
+    }
+    return { polishedPrompt: await this.complete(setting, prompt, mode, imageDataUrl) };
   }
 
-  async test() {
+  async test(id: string) {
     const now = new Date();
     const cooldownUntil = new Date(now.getTime() + PROMPT_POLISH_TEST_COOLDOWN_MS);
     const claimed = await this.prisma.promptPolishSetting.updateMany({
-      where: { id: PROMPT_POLISH_SETTING_ID, OR: [{ testCooldownUntil: null }, { testCooldownUntil: { lte: now } }] },
+      where: { id, OR: [{ testCooldownUntil: null }, { testCooldownUntil: { lte: now } }] },
       data: { testCooldownUntil: cooldownUntil, lastTestOk: null },
     });
     if (!claimed.count) {
-      const current = await this.prisma.promptPolishSetting.findUnique({ where: { id: PROMPT_POLISH_SETTING_ID }, select: { testCooldownUntil: true } });
-      if (!current) throw new BadRequestException('请先保存提示词润色配置');
+      const current = await this.prisma.promptPolishSetting.findUnique({ where: { id }, select: { testCooldownUntil: true } });
+      if (!current) throw new BadRequestException('配置不存在');
       const retryAfterSeconds = Math.max(1, Math.ceil(((current.testCooldownUntil?.getTime() ?? now.getTime()) - now.getTime()) / 1000));
       throw new HttpException({ message: `请等待 ${retryAfterSeconds} 秒后再次测试`, retryAfterSeconds }, HttpStatus.TOO_MANY_REQUESTS);
     }
 
-    const setting = await this.prisma.promptPolishSetting.findUnique({ where: { id: PROMPT_POLISH_SETTING_ID } });
-    if (!setting) throw new BadRequestException('请先保存提示词润色配置');
+    const setting = await this.prisma.promptPolishSetting.findUnique({ where: { id } });
+    if (!setting) throw new BadRequestException('配置不存在');
     try {
       await this.complete(setting, PROMPT_POLISH_TEST_PROMPT);
-      await this.prisma.promptPolishSetting.update({ where: { id: PROMPT_POLISH_SETTING_ID }, data: { lastTestOk: true } });
+      await this.prisma.promptPolishSetting.update({ where: { id }, data: { lastTestOk: true } });
       return { ok: true, cooldownUntil };
     } catch (error) {
       this.logger.warn(`提示词润色供应商测试失败：${safeErrorMessage(error)}`);
-      await this.prisma.promptPolishSetting.update({ where: { id: PROMPT_POLISH_SETTING_ID }, data: { lastTestOk: false } });
+      await this.prisma.promptPolishSetting.update({ where: { id }, data: { lastTestOk: false } });
       return { ok: false, error: error instanceof Error ? error.message : '提示词润色供应商测试失败', cooldownUntil };
     }
   }
 
-  audit(actorId: string, action: string, metadata?: any) {
-    return this.prisma.auditLog.create({ data: { actorId, action, targetType: 'prompt-polish', targetId: PROMPT_POLISH_SETTING_ID, ...(metadata ? { metadata } : {}) } });
+  audit(actorId: string, action: string, targetId: string, metadata?: any) {
+    return this.prisma.auditLog.create({ data: { actorId, action, targetType: 'prompt-polish', targetId, ...(metadata ? { metadata } : {}) } });
   }
 
   private async usableSetting(): Promise<PromptPolishSettingRow> {
-    const setting = await this.prisma.promptPolishSetting.findUnique({ where: { id: PROMPT_POLISH_SETTING_ID } });
-    if (!setting || !setting.encryptedApiKey) throw new ServiceUnavailableException('提示词润色尚未配置');
-    if (!setting.enabled) throw new ServiceUnavailableException('提示词润色未启用');
+    const setting = await this.prisma.promptPolishSetting.findFirst({ where: { enabled: true } });
+    if (!setting) throw new ServiceUnavailableException('提示词润色未启用');
     return setting;
   }
 
-  private async complete(setting: PromptPolishSettingRow, prompt: string, mode: 'TEXT_TO_IMAGE' | 'TEXT_TO_VIDEO' = 'TEXT_TO_IMAGE') {
+  private toAdminItem(setting: PromptPolishSettingRow): PromptPolishAdminItem {
+    return {
+      id: setting.id,
+      name: setting.name,
+      providerName: setting.providerName,
+      baseUrl: setting.baseUrl,
+      modelId: setting.modelId,
+      timeoutSeconds: setting.timeoutSeconds,
+      enabled: setting.enabled,
+      systemPrompt: setting.systemPrompt ?? '',
+      supportsImageEdit: setting.supportsImageEdit,
+      usingDefaultSystemPrompt: !setting.systemPrompt?.trim(),
+      hasApiKey: Boolean(setting.encryptedApiKey),
+      testCooldownUntil: setting.testCooldownUntil,
+      lastTestOk: setting.lastTestOk,
+    };
+  }
+
+  private async complete(setting: PromptPolishSettingRow, prompt: string, mode: 'TEXT_TO_IMAGE' | 'IMAGE_EDIT' | 'TEXT_TO_VIDEO' = 'TEXT_TO_IMAGE', imageDataUrl?: string) {
     const headers = providerRequestHeaders(this.crypto, setting);
     headers['Content-Type'] = 'application/json';
+    const systemPrompt = mode === 'TEXT_TO_VIDEO'
+      ? DEFAULT_PROMPT_POLISH_VIDEO_SYSTEM_PROMPT
+      : mode === 'IMAGE_EDIT'
+        ? DEFAULT_PROMPT_POLISH_IMAGE_EDIT_SYSTEM_PROMPT
+        : (setting.systemPrompt?.trim() || DEFAULT_PROMPT_POLISH_SYSTEM_PROMPT);
     let response;
     try {
       response = await this.http.request(
@@ -179,8 +238,8 @@ export class PromptPolishService {
           body: JSON.stringify({
             model: setting.modelId,
             messages: [
-              { role: 'system', content: mode === 'TEXT_TO_VIDEO' ? DEFAULT_PROMPT_POLISH_VIDEO_SYSTEM_PROMPT : (setting.systemPrompt?.trim() || DEFAULT_PROMPT_POLISH_SYSTEM_PROMPT) },
-              { role: 'user', content: prompt },
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: imageDataUrl ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: imageDataUrl } }] : prompt },
             ],
           }),
           redirectPolicy: 'same-origin',

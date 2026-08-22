@@ -12,6 +12,7 @@ import { CryptoService } from './crypto.service';
 import { PrismaService } from './prisma.service';
 import { StorageService } from './storage.service';
 import { safeErrorMessage } from './common';
+import { fileToDataUrl } from './image-data-url';
 import { MAX_IMAGE_BYTES } from './domain-constants';
 import { MAX_ERROR_BYTES, MAX_GENERATION_RESPONSE_BYTES, SafeHttpService } from './safe-http.service';
 import { securityConfig } from './security-config';
@@ -535,11 +536,11 @@ export class GenerationProcessor extends WorkerHost {
         const reader = await this.jobReader(job.userId, job.user.role);
         for (const assetId of sourceIds) {
           const asset = await this.sourceAsset(reader, assetId);
-          imageDataUrls.push(await this.fileToDataUrl(this.storage.filePath(asset.objectKey), asset.mimeType));
+          imageDataUrls.push(await fileToDataUrl(this.storage.filePath(asset.objectKey), asset.mimeType));
         }
         if (typeof params.maskAssetId === 'string') {
           const mask = await this.ownedMask(job.userId, params.maskAssetId);
-          imageDataUrls.push(await this.fileToDataUrl(this.storage.filePath(mask.objectKey), mask.mimeType));
+          imageDataUrls.push(await fileToDataUrl(this.storage.filePath(mask.objectKey), mask.mimeType));
         }
       }
       const chatHeaders = { ...headers, 'Content-Type': 'application/json' };
@@ -568,13 +569,6 @@ export class GenerationProcessor extends WorkerHost {
       this.logger.warn(`任务 ${job.id} 的 Chat Completions 回退失败：${safeErrorMessage(error)}`);
       return undefined;
     }
-  }
-
-  private async fileToDataUrl(path: string, mimeType: string) {
-    const bytes = await readFile(path);
-    if (bytes.length > MAX_IMAGE_BYTES) throw new Error('参考图超过大小限制');
-    const mime = mimeType === 'image/jpeg' || mimeType === 'image/png' || mimeType === 'image/webp' ? mimeType : 'image/png';
-    return `data:${mime};base64,${bytes.toString('base64')}`;
   }
 
   private async persistSource(userId: string, jobId: string, source: ProviderImageSource) {
