@@ -4,8 +4,6 @@ English | [简体中文](README_zh.md)
 
 KnewStudio is a self-hosted image and video generation workspace for teams. It supports OpenAI Images-compatible providers, OpenAI Videos / Seedance / Wan video adapters, text-to-image generation, full-image editing, masked inpainting, text-to-video, image-to-video, asset management, and an administration console with user groups and model permissions.
 
-Latest release: [v0.2.0](https://github.com/BossKnew/KnewStudio/releases/tag/v0.2.0). Video generation is now a product feature. See the [changelog](CHANGELOG.md).
-
 ## Features
 
 - OpenAI Images-compatible providers plus OpenAI Videos, Seedance, and Wan video adapters
