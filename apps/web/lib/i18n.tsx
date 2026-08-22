@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import Icon from '@/components/Icon';
 
 export type Locale = 'zh' | 'en';
 
@@ -603,15 +604,12 @@ export function LanguageSwitcher() {
 
   return <div className="language-switcher" ref={rootRef}>
     <button className="language-switcher-trigger" type="button" onClick={() => setOpen((current) => !current)} aria-haspopup="menu" aria-expanded={open} aria-label={t('语言')} title={t('语言')}>
-      <svg className="language-switcher-icon" viewBox="0 0 24 24" aria-hidden="true">
-        <circle cx="12" cy="12" r="10" />
-        <path d="M2 12h20M12 2a15.3 15.3 0 0 1 0 20M12 2a15.3 15.3 0 0 0 0 20" />
-      </svg>
-      <span>{locale === 'zh' ? '中文' : 'English'}</span><span className={`language-switcher-chevron ${open ? 'open' : ''}`} aria-hidden="true">⌄</span>
+      <Icon className="language-switcher-icon" name="globe" />
+      <span>{locale === 'zh' ? '中文' : 'English'}</span><Icon className={`language-switcher-chevron ${open ? 'open' : ''}`} name="chevron-down" />
     </button>
     {open && <div className="language-switcher-menu" role="menu" aria-label={t('语言')}>
-      <button className={`language-option ${locale === 'zh' ? 'active' : ''}`} type="button" role="menuitemradio" aria-checked={locale === 'zh'} onClick={() => choose('zh')}><span>中文</span>{locale === 'zh' && <span aria-hidden="true">✓</span>}</button>
-      <button className={`language-option ${locale === 'en' ? 'active' : ''}`} type="button" role="menuitemradio" aria-checked={locale === 'en'} onClick={() => choose('en')}><span>English</span>{locale === 'en' && <span aria-hidden="true">✓</span>}</button>
+      <button className={`language-option ${locale === 'zh' ? 'active' : ''}`} type="button" role="menuitemradio" aria-checked={locale === 'zh'} onClick={() => choose('zh')}><span>中文</span>{locale === 'zh' && <Icon name="check" />}</button>
+      <button className={`language-option ${locale === 'en' ? 'active' : ''}`} type="button" role="menuitemradio" aria-checked={locale === 'en'} onClick={() => choose('en')}><span>English</span>{locale === 'en' && <Icon name="check" />}</button>
     </div>}
   </div>;
 }

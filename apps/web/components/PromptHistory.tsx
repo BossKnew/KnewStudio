@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, json } from '@/lib/api';
 import type { CursorPage, PromptEntry } from '@/lib/studio-types';
 import { useI18n } from '@/lib/i18n';
+import Icon from '@/components/Icon';
 
 type PromptHistoryProps = {
   onPick: (prompt: string) => void;
@@ -82,7 +83,7 @@ export default function PromptHistory({ onPick }: PromptHistoryProps) {
 
   return <div className="prompt-history" ref={rootRef}>
     <button className="prompt-history-trigger" type="button" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
-      <span aria-hidden="true">◷</span>{t('Prompt 历史')}
+      <Icon name="history" />{t('Prompt 历史')}
     </button>
     {open && <section className="prompt-history-popover" aria-label={t('Prompt 历史')}>
       <div className="prompt-history-tabs" role="tablist" aria-label={t('Prompt 类型')}>

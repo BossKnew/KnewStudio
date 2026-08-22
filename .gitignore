@@ -29,3 +29,6 @@ media/
 Thumbs.db
 .idea/
 .vscode/
+
+# Local tool state
+.reasonix/

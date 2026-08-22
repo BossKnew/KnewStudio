@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { Asset, ConversationDetail, GenerationJob } from '@/lib/studio-types';
 import type { DownloadResult } from '@/lib/download';
 import { useI18n } from '@/lib/i18n';
+import Icon from '@/components/Icon';
 
 type JobHistoryProps = {
   conversation: ConversationDetail;
@@ -90,7 +91,7 @@ export default function JobHistory({ conversation, onLoadOlder, referenceIds, on
         return <div className={'image-card job-image-card ' + (selected ? 'selected-reference' : '')} key={jobAsset.id}>
           <button className="image-thumbnail" type="button" onClick={() => onOpenImage(referenceAsset)} aria-label={jobAsset.mediaKind === 'VIDEO' || jobAsset.mimeType === 'video/mp4' ? t('播放生成视频') : t('放大查看生成图片')}>
             <img src={jobAsset.thumbnailUrl ?? jobAsset.contentUrl} loading="lazy" decoding="async" alt={job.prompt} />
-            {(jobAsset.mediaKind === 'VIDEO' || jobAsset.mimeType === 'video/mp4') && <span className="video-play-badge" aria-hidden="true">▶</span>}
+            {(jobAsset.mediaKind === 'VIDEO' || jobAsset.mimeType === 'video/mp4') && <Icon className="video-play-badge" name="play" />}
             <span className="image-expand" aria-hidden="true">{jobAsset.mediaKind === 'VIDEO' || jobAsset.mimeType === 'video/mp4' ? t('播放') : t('放大')}</span>
           </button>
           {jobAsset.mediaKind === 'VIDEO' || jobAsset.mimeType === 'video/mp4' ? null : <button className="button reference-button" type="button" onClick={() => onUseAsReference(referenceAsset, job.prompt)}>{selected ? t('已选为参考图') : t('设为参考图')}</button>}
@@ -116,5 +117,5 @@ function legacyDeletedAssetCount(job: GenerationJob) {
 
 function DeletedAssetPlaceholder() {
   const { t } = useI18n();
-  return <div className="deleted-asset-placeholder" role="status"><span aria-hidden="true">▧</span><strong>{t('已在资产库中删除')}</strong></div>;
+  return <div className="deleted-asset-placeholder" role="status"><Icon name="image" /><strong>{t('已在资产库中删除')}</strong></div>;
 }

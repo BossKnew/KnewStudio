@@ -3,6 +3,7 @@ import { api, json } from '@/lib/api';
 import { downloadFiles, extensionForMime } from '@/lib/download';
 import type { Asset, CursorPage, StudioGroup } from '@/lib/studio-types';
 import { useI18n } from '@/lib/i18n';
+import Icon from '@/components/Icon';
 
 type LibraryTab = 'mine' | 'shared';
 
@@ -206,12 +207,12 @@ export default function AssetLibrary({
   const heading = tab === 'mine' ? t('资产库') : t('组内素材');
   const description = tab === 'mine' ? t('集中查看和管理你的上传图片与生成结果。') : t('查看同组成员分享的参考图。内容仍占用分享者的存储配额。');
   const empty = tab === 'mine'
-    ? <div className="empty-state"><div className="empty-icon" aria-hidden="true">▧</div><h2>{t('资产库还是空的')}</h2><p className="muted">{t('上传图片或完成一次创作后，内容会显示在这里。')}</p><button className="button primary" onClick={onStartCreation}>{t('开始创作')}</button></div>
+    ? <div className="empty-state"><Icon className="empty-icon" name="image" /><h2>{t('资产库还是空的')}</h2><p className="muted">{t('上传图片或完成一次创作后，内容会显示在这里。')}</p><button className="button primary" onClick={onStartCreation}>{t('开始创作')}</button></div>
     : isAdmin && !groupId
-      ? <div className="empty-state"><div className="empty-icon" aria-hidden="true">◎</div><h2>{t('选择一个用户组')}</h2><p className="muted">{t('管理员需要先选择用户组，才能查看该组已分享的素材。')}</p></div>
+      ? <div className="empty-state"><Icon className="empty-icon" name="group" /><h2>{t('选择一个用户组')}</h2><p className="muted">{t('管理员需要先选择用户组，才能查看该组已分享的素材。')}</p></div>
       : !groups.length
-        ? <div className="empty-state"><div className="empty-icon" aria-hidden="true">◎</div><h2>{t('还没有用户组')}</h2><p className="muted">{t('你还不在任何用户组中，请联系管理员。')}</p></div>
-        : <div className="empty-state"><div className="empty-icon" aria-hidden="true">▧</div><h2>{t('组内还没有分享的图片')}</h2><p className="muted">{t('组成员可以从自己的资产库把图片分享到用户组。')}</p></div>;
+        ? <div className="empty-state"><Icon className="empty-icon" name="group" /><h2>{t('还没有用户组')}</h2><p className="muted">{t('你还不在任何用户组中，请联系管理员。')}</p></div>
+        : <div className="empty-state"><Icon className="empty-icon" name="image" /><h2>{t('组内还没有分享的图片')}</h2><p className="muted">{t('组成员可以从自己的资产库把图片分享到用户组。')}</p></div>;
 
   return <section className="asset-library">
     <div className="section-heading">
@@ -245,12 +246,11 @@ export default function AssetLibrary({
       {visible.map((asset) => <article className={'card image-card asset-card ' + (selectedIds.has(asset.id) ? 'asset-selected' : '')} key={asset.shareId ?? asset.id}>
         <label className="asset-select">
           <input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} aria-label={t('选择图片下载')} />
-          <span aria-hidden="true">✓</span>
         </label>
         {tab === 'mine' && Boolean(asset.sharedGroupIds?.length) && <span className="asset-share-badge">{t('已分享')}</span>}
         <button className="image-thumbnail" type="button" onClick={() => onOpenAsset(asset)} aria-label={asset.mediaKind === 'VIDEO' ? t('播放生成视频') : t('放大查看图片')}>
           <img src={asset.thumbnailUrl ?? asset.contentUrl} loading="lazy" decoding="async" alt={asset.role === 'OUTPUT' ? t('生成资产') : t('上传资产')} />
-          {asset.mediaKind === 'VIDEO' && <span className="video-play-badge" aria-hidden="true">▶</span>}
+          {asset.mediaKind === 'VIDEO' && <Icon className="video-play-badge" name="play" />}
           <span className="image-expand" aria-hidden="true">{asset.mediaKind === 'VIDEO' ? t('播放') : t('放大')}</span>
         </button>
         <div className="asset-meta">
@@ -269,11 +269,11 @@ export default function AssetLibrary({
           </div>
         </div>}
         <div className="asset-actions">
-          {tab === 'shared' && asset.mediaKind !== 'VIDEO' && <button className="icon-action" type="button" onClick={() => onUseAsReference(asset)} aria-label={t('设为参考图')} title={t('设为参考图')}><ReferenceIcon /></button>}
-          {tab === 'mine' && <button className={'icon-action ' + (asset.sharedGroupIds?.length ? 'has-value' : '')} type="button" disabled={!canShare} onClick={() => void beginShare(asset)} aria-label={t('分享到用户组')} title={canShare ? t('分享到用户组') : t('你还不在任何用户组中，请联系管理员。')}><ShareIcon /></button>}
-          {tab === 'mine' && <button className={'icon-action ' + (asset.note ? 'has-value' : '')} type="button" onClick={() => beginNote(asset)} aria-label={asset.note ? t('编辑备注') : t('添加备注')} title={asset.note ? t('编辑备注') : t('添加备注')}><NoteIcon /></button>}
-          {tab === 'mine' && <button className="icon-action danger-action" type="button" onClick={() => void deleteAsset(asset)} aria-label={t('删除资产')} title={t('删除')}><DeleteIcon /></button>}
-          {tab === 'shared' && asset.canUnshare && <button className="icon-action danger-action" type="button" onClick={() => void unshare(asset)} aria-label={t('取消分享')} title={t('取消分享')}><UnshareIcon /></button>}
+          {tab === 'shared' && asset.mediaKind !== 'VIDEO' && <button className="icon-action" type="button" onClick={() => onUseAsReference(asset)} aria-label={t('设为参考图')} title={t('设为参考图')}><Icon name="reference" /></button>}
+          {tab === 'mine' && <button className={'icon-action ' + (asset.sharedGroupIds?.length ? 'has-value' : '')} type="button" disabled={!canShare} onClick={() => void beginShare(asset)} aria-label={t('分享到用户组')} title={canShare ? t('分享到用户组') : t('你还不在任何用户组中，请联系管理员。')}><Icon name="share" /></button>}
+          {tab === 'mine' && <button className={'icon-action ' + (asset.note ? 'has-value' : '')} type="button" onClick={() => beginNote(asset)} aria-label={asset.note ? t('编辑备注') : t('添加备注')} title={asset.note ? t('编辑备注') : t('添加备注')}><Icon name="note" /></button>}
+          {tab === 'mine' && <button className="icon-action danger-action" type="button" onClick={() => void deleteAsset(asset)} aria-label={t('删除资产')} title={t('删除')}><Icon name="delete" /></button>}
+          {tab === 'shared' && asset.canUnshare && <button className="icon-action danger-action" type="button" onClick={() => void unshare(asset)} aria-label={t('取消分享')} title={t('取消分享')}><Icon name="unshare" /></button>}
         </div>
       </article>)}
     </div>}
@@ -294,22 +294,3 @@ export default function AssetLibrary({
   </section>;
 }
 
-function NoteIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v12H9l-4 4V4Z" /><path d="M8 8h8M8 12h5" /></svg>;
-}
-
-function DeleteIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" /></svg>;
-}
-
-function ShareIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><path d="M8.6 13.5 15.4 17.5M15.4 6.5 8.6 10.5" /></svg>;
-}
-
-function ReferenceIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 12h16M4 17h10" /><path d="m14 7 6-3v6Z" /></svg>;
-}
-
-function UnshareIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><path d="M8.6 10.5 15.4 6.5M5 19 19 5" /></svg>;
-}

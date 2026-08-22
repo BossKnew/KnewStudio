@@ -2,6 +2,7 @@ import { KeyboardEvent, useState } from 'react';
 import type { ConversationSummary, StudioUser, UsageSnapshot } from '@/lib/studio-types';
 import { formatStorageBytes } from '@/lib/format-bytes';
 import { useI18n } from '@/lib/i18n';
+import Icon from '@/components/Icon';
 
 type StudioSidebarProps = {
   user: StudioUser;
@@ -63,28 +64,28 @@ export default function StudioSidebar({
   return <aside className="sidebar">
     <h2 className="brand">KnewStudio</h2>
     <nav className="sidebar-nav" aria-label={t('工作区导航')}>
-      <button className="button primary conversation" onClick={onNewCreation}>＋ {t('新创作')}</button>
+      <button className="button primary conversation" onClick={onNewCreation}><Icon name="plus" />{t('新创作')}</button>
       <button className={`button nav-button ${activeView === 'assets' ? 'active' : ''}`} onClick={onShowAssets}>
-        <span className="nav-button-label"><span aria-hidden="true">▧</span> {t('资产库')}</span>
+        <span className="nav-button-label"><Icon name="image" />{t('资产库')}</span>
         <span className="nav-count">{assetCount}</span>
       </button>
       <button className="recent-toggle" onClick={() => setRecentOpen((open) => !open)} aria-expanded={recentOpen} aria-controls="recent-conversations">
-        <span>{t('最近会话')}</span><span className={`chevron ${recentOpen ? 'open' : ''}`} aria-hidden="true">›</span>
+        <span>{t('最近会话')}</span><Icon className={`chevron ${recentOpen ? 'open' : ''}`} name="chevron-right" />
       </button>
       {recentOpen && <div id="recent-conversations" className="conversation-list">
         {conversations.length === 0 && <p className="sidebar-empty">{t('还没有会话')}</p>}
         {conversations.map((item) => <div key={item.id} className={`conversation-row ${activeView === 'studio' && activeConversationId === item.id ? 'active' : ''}`}>
           {renamingId === item.id ? <div className="rename-box">
             <input className="field rename-input" value={renameTitle} maxLength={80} autoFocus onChange={(event) => setRenameTitle(event.target.value)} onKeyDown={(event) => handleRenameKey(event, item.id)} aria-label={t('会话名称')} />
-            <button className="icon-button success-action" onClick={() => void saveRename(item.id)} disabled={renaming || !renameTitle.trim()} aria-label={t('保存重命名')}>✓</button>
-            <button className="icon-button" onClick={() => setRenamingId('')} disabled={renaming} aria-label={t('取消重命名')}>×</button>
+            <button className="icon-button success-action" onClick={() => void saveRename(item.id)} disabled={renaming || !renameTitle.trim()} aria-label={t('保存重命名')}><Icon name="check" /></button>
+            <button className="icon-button" onClick={() => setRenamingId('')} disabled={renaming} aria-label={t('取消重命名')}><Icon name="close" /></button>
           </div> : <>
             <button className="conversation-main" onClick={() => void onLoadConversation(item.id)} title={item.title}>
               <span className="conversation-title">{item.title}</span><span className="conversation-count">{item._count.jobs}</span>
             </button>
             <div className="conversation-actions">
-              <button className="icon-button" onClick={() => beginRename(item)} aria-label={`${t('重命名')} ${item.title}`} title={t('重命名')}>✎</button>
-              <button className="icon-button danger-action" onClick={() => onDeleteConversation(item)} aria-label={`${t('删除')} ${item.title}`} title={t('删除')}>×</button>
+              <button className="icon-button" onClick={() => beginRename(item)} aria-label={`${t('重命名')} ${item.title}`} title={t('重命名')}><Icon name="edit" /></button>
+              <button className="icon-button danger-action" onClick={() => onDeleteConversation(item)} aria-label={`${t('删除')} ${item.title}`} title={t('删除')}><Icon name="close" /></button>
             </div>
           </>}
         </div>)}
@@ -113,7 +114,7 @@ export default function StudioSidebar({
       <button className="account-trigger" type="button" aria-haspopup="menu" aria-expanded={accountOpen} onClick={() => setAccountOpen((open) => !open)}>
         <span className="user-avatar" aria-hidden="true">{avatarText(user.displayName || user.username)}</span>
         <span className="account-copy"><strong>{user.displayName || user.username}</strong><span>{user.username}</span></span>
-        <span className="account-chevron" aria-hidden="true">⌃</span>
+        <Icon className="account-chevron" name="chevron-up" />
       </button>
     </div>
     </div>

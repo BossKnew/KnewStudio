@@ -15,5 +15,5 @@ export default function App() {
       : path === '/settings' ? <SettingsPage />
         : path === '/' ? <StudioPage />
           : <main className="auth-page"><div className="auth-language"><LanguageSwitcher /></div><section className="auth-box card stack"><h1>404</h1><p>{t('页面不存在')}</p></section></main>;
-  return <Suspense fallback={<main className="auth-page">{t('加载中…')}</main>}>{page}</Suspense>;
+  return <Suspense fallback={<main className="auth-page"><div className="auth-language"><LanguageSwitcher /></div><section className="auth-box card stack"><h1>{t('加载中…')}</h1></section></main>}>{page}</Suspense>;
 }
