@@ -367,7 +367,7 @@ export default function AdminPage() {
     </aside>
 
     <main className="main admin-main">
-      <header className="topbar admin-topbar"><div><h1>{view === 'users' ? t('用户管理') : view === 'groups' ? t('用户组') : view === 'usage' ? t('用量') : view === 'providers' ? t('添加供应商') : view === 'models' ? t('添加模型') : view === 'labels' ? t('显示文案') : view === 'prompt-polish' ? t('提示词润色') : t('安全')}</h1><p className="muted">{view === 'security' ? t('管理你的管理员账号安全选项。') : view === 'prompt-polish' ? t('配置用于文生图和文生视频提示词润色的大语言模型。') : view === 'usage' ? t('查看各用户在选定 UTC 日期范围内消耗的图片张数和视频秒数。重试会计入。') : view === 'labels' ? t('设置尺寸、比例、质量和时长在工作台中文/英文界面的显示名称。') : t('管理 KnewStudio 的访问权限、图片与视频生成能力。')}</p></div><LanguageSwitcher /></header>
+      <header className="topbar admin-topbar"><div><h1>{view === 'users' ? t('用户管理') : view === 'groups' ? t('用户组') : view === 'usage' ? t('用量') : view === 'providers' ? t('添加供应商') : view === 'models' ? t('添加模型') : view === 'labels' ? t('显示文案') : view === 'prompt-polish' ? t('提示词润色') : t('安全')}</h1><p className="muted">{view === 'security' ? t('管理你的管理员账号安全选项。') : view === 'prompt-polish' ? t('配置用于文生图、图片编辑和文生视频提示词润色的大语言模型。') : view === 'usage' ? t('查看各用户在选定 UTC 日期范围内消耗的图片张数和视频秒数。重试会计入。') : view === 'labels' ? t('设置尺寸、比例、质量和时长在工作台中文/英文界面的显示名称。') : t('管理 KnewStudio 的访问权限、图片与视频生成能力。')}</p></div><LanguageSwitcher /></header>
       {error && <p className="error admin-error">{error}</p>}
 
       {view === 'users' && <section className="admin-section stack">

@@ -130,11 +130,25 @@ export default function StudioComposer({ models, optionLabels = {}, conversation
       setError(t('提示词不能为空'));
       return;
     }
-    if (!confirm(t('确定润色当前提示词？将调用润色模型改写内容。'))) return;
+    const editing = mode === 'IMAGE_EDIT';
+    if (editing && !primaryReference) {
+      setError(t('请选择或上传一张原图'));
+      return;
+    }
+    if (editing ? !confirm(t('确定润色当前提示词？将调用润色模型改写内容，并把当前参考图作为润色的一部分发送给模型。')) : !confirm(t('确定润色当前提示词？将调用润色模型改写内容。'))) return;
     setPolishBusy(true);
     setError('');
     try {
-      const result = await api<{ polishedPrompt: string }>('/prompt-polish', json('POST', { prompt: sourcePrompt, mode: video ? 'TEXT_TO_VIDEO' : 'TEXT_TO_IMAGE' }));
+      let sourceAssetId: string | undefined;
+      if (editing) {
+        const asset = primaryReference.kind === 'file' ? await upload(primaryReference.file) : primaryReference.asset;
+        sourceAssetId = asset.id;
+      }
+      const result = await api<{ polishedPrompt: string }>('/prompt-polish', json('POST', {
+        prompt: sourcePrompt,
+        mode: video ? 'TEXT_TO_VIDEO' : editing ? 'IMAGE_EDIT' : 'TEXT_TO_IMAGE',
+        ...(sourceAssetId ? { sourceAssetId } : {}),
+      }));
       setPolishPreview({ sourcePrompt, polishedPrompt: result.polishedPrompt });
     } catch (caught) {
       setError((caught as Error).message);
@@ -239,7 +253,7 @@ export default function StudioComposer({ models, optionLabels = {}, conversation
       <textarea className="field prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={video ? t('输入视频描述或镜头要求') : t('输入图片描述或编辑要求')} required />
       <div className="prompt-input-actions">
         <PromptHistory onPick={(value) => { setPrompt(value); setPolishPreview(null); }} />
-        {(mode === 'TEXT_TO_IMAGE' || mode === 'TEXT_TO_VIDEO') && <button className="button prompt-polish-button" type="button" disabled={polishBusy || busy} onClick={() => void polishPrompt()}>{polishBusy ? t('正在润色…') : t('提示词润色')}</button>}
+        {(mode === 'TEXT_TO_IMAGE' || mode === 'TEXT_TO_VIDEO' || (mode === 'IMAGE_EDIT' && hasSource)) && <button className="button prompt-polish-button" type="button" disabled={polishBusy || busy} onClick={() => void polishPrompt()}>{polishBusy ? t('正在润色…') : t('提示词润色')}</button>}
       </div>
     </div>
     {polishPreview && <section className="prompt-polish-preview" aria-live="polite">
